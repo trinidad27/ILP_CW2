@@ -1,20 +1,11 @@
 package uk.ac.ed.acp.cw2.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import uk.ac.ed.acp.cw2.data.*;
-import uk.ac.ed.acp.cw2.service.GeoService;
-
-import java.sql.Time;
-import java.time.DayOfWeek;
-import java.time.LocalDate;
-import java.time.LocalTime;
 import java.util.*;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
-
-import static java.util.regex.Pattern.matches;
 
 @Service
 public class DroneService {

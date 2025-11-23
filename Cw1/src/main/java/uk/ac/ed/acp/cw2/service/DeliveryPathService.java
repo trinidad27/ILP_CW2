@@ -63,44 +63,36 @@ public class DeliveryPathService {
 
         // Fetch data fresh every time
         List<Drone> allDrones = droneAvailabilityService.fetchAllDrones();
-        System.out.println("All drones: " + allDrones.size());
 
         Map<String, Drone> droneMap = allDrones.stream()
                 .collect(Collectors.toMap(Drone::getId, d -> d));
         Map<Integer, DroneServicePoint> servicePoints = fetchServicePoints();
-        System.out.println("Service points: " + servicePoints.keySet());
 
         List<RestrictedArea> noFlyZones = fetchRestrictedAreas();
         Map<Integer, Set<String>> dronesPerSP = fetchDronesPerServicePoint();
-        System.out.println("Drones per SP: " + dronesPerSP);
 
-        // Find available drones
-        List<String> availableDroneIds = droneAvailabilityService.findAvailableDrones(dispatches);
-        System.out.println("Available drones: " + availableDroneIds);
-
-        if (availableDroneIds.isEmpty()) {
-            return new DeliveryPathResponse(0.0, 0, Collections.emptyList());
-        }
+        // Fetch availability once
+        Map<String, List<Availability>> availabilityMap = droneAvailabilityService.fetchAvailabilityMap();
 
         List<DronePath> dronePaths = new ArrayList<>();
         double totalCost = 0.0;
         int totalMoves = 0;
         List<MedDispatchRec> remaining = new ArrayList<>(dispatches);
 
-        // Group available drones by their service points
+        // Group all drones by their service points
         Map<Integer, List<String>> dronesByServicePoint = new HashMap<>();
-        for (String droneId : availableDroneIds) {
-            Integer spId = findServicePointForDrone(droneId, dronesPerSP);
-            if (spId != null) {
-                dronesByServicePoint.computeIfAbsent(spId, k -> new ArrayList<>()).add(droneId);
-            }
+        for (Map.Entry<Integer, Set<String>> entry : dronesPerSP.entrySet()) {
+            dronesByServicePoint.put(entry.getKey(), new ArrayList<>(entry.getValue()));
         }
 
-        System.out.println("Drones grouped by service point: " + dronesByServicePoint);
+        // Track which drones have been used
+        Set<String> usedDrones = new HashSet<>();
 
         // Process deliveries by finding nearest service point with available drones
-        while (!remaining.isEmpty()) {
-            // Calculate centroid of remaining deliveries to find nearest SP
+        int maxAttempts = 100; // Prevent infinite loops
+        int attempts = 0;
+
+        while (!remaining.isEmpty() && attempts++ < maxAttempts) {
             double avgLng = remaining.stream()
                     .filter(d -> d.getDelivery() != null)
                     .mapToDouble(d -> d.getDelivery().getLng())
@@ -112,48 +104,52 @@ public class DeliveryPathService {
                     .average()
                     .orElse(0);
 
-            System.out.println("Remaining deliveries centroid: (" + avgLng + ", " + avgLat + ")");
-
-            // Find nearest service point with available drones
+            // Find nearest service point with available drones that can handle remaining dispatches
             Integer nearestSpId = null;
+            String selectedDroneId = null;
             double nearestDistance = Double.MAX_VALUE;
 
             for (Map.Entry<Integer, List<String>> entry : dronesByServicePoint.entrySet()) {
-                if (entry.getValue().isEmpty()) continue; // No more drones at this SP
-
                 DroneServicePoint sp = servicePoints.get(entry.getKey());
                 if (sp == null || sp.getLocation() == null) continue;
 
                 double dist = distance(sp.getLocation().getLng(), sp.getLocation().getLat(), avgLng, avgLat);
-                if (dist < nearestDistance) {
-                    nearestDistance = dist;
-                    nearestSpId = entry.getKey();
+
+                // Find an available drone at this SP that can handle at least one remaining dispatch
+                for (String droneId : entry.getValue()) {
+                    if (usedDrones.contains(droneId)) continue;
+
+                    Drone drone = droneMap.get(droneId);
+                    if (drone == null || drone.getCapability() == null) continue;
+
+                    // Check if this drone can handle at least one remaining dispatch
+                    boolean canHandleAny = false;
+                    for (MedDispatchRec dispatch : remaining) {
+                        if (canDroneHandleDispatch(drone, dispatch, availabilityMap)) {
+                            canHandleAny = true;
+                            break;
+                        }
+                    }
+
+                    if (canHandleAny && dist < nearestDistance) {
+                        nearestDistance = dist;
+                        nearestSpId = entry.getKey();
+                        selectedDroneId = droneId;
+                    }
                 }
             }
 
-            if (nearestSpId == null) {
-                System.out.println("No more service points with available drones");
-                break; // No more drones available anywhere
+            if (nearestSpId == null || selectedDroneId == null) {
+                break; // No more suitable drones available
             }
 
             DroneServicePoint sp = servicePoints.get(nearestSpId);
-            List<String> availableDronesAtSP = dronesByServicePoint.get(nearestSpId);
-            String droneId = availableDronesAtSP.get(0); // Pick first available drone
-            Drone drone = droneMap.get(droneId);
+            Drone drone = droneMap.get(selectedDroneId);
 
-            System.out.println("Selected SP: " + sp.getName() + " (id=" + nearestSpId + ", distance=" + nearestDistance + ")");
-            System.out.println("Selected drone: " + droneId);
-
-            if (drone == null || drone.getCapability() == null) {
-                availableDronesAtSP.remove(0);
-                continue;
-            }
-
-            System.out.println("  Building path...");
             DronePath path = buildDronePath(drone, sp, remaining, noFlyZones);
-            System.out.println("  Path deliveries: " + path.getDeliveries().size());
 
             if (!path.getDeliveries().isEmpty()) {
+                // Path was successful, add it
                 dronePaths.add(path);
                 totalCost += path.getCost();
                 totalMoves += path.getMoves();
@@ -161,13 +157,80 @@ public class DeliveryPathService {
                 Set<Integer> doneIds = path.getDeliveries().stream()
                         .map(Delivery::getDeliveryId).collect(Collectors.toSet());
                 remaining.removeIf(d -> doneIds.contains(d.getId()));
-            }
 
-            // Remove this drone from available pool
-            availableDronesAtSP.remove(0);
+                // Mark drone as used
+                usedDrones.add(selectedDroneId);
+            } else {
+
+                usedDrones.add(selectedDroneId);
+            }
         }
 
         return new DeliveryPathResponse(totalCost, totalMoves, dronePaths);
+    }
+
+    /**
+     * Check if a drone can handle a specific dispatch based on capability and availability
+     */
+    private boolean canDroneHandleDispatch(Drone drone, MedDispatchRec dispatch,
+                                           Map<String, List<Availability>> availabilityMap) {
+        if (drone == null || drone.getCapability() == null || dispatch == null) {
+            return false;
+        }
+
+        Capability cap = drone.getCapability();
+        Requirements req = dispatch.getRequirements();
+
+        if (req == null) {
+            return true;
+        }
+
+        // Check capacity
+        if (req.getCapacity() != null && cap.getCapacity() != null) {
+            if (cap.getCapacity() < req.getCapacity()) {
+                return false;
+            }
+        }
+
+        // Check cooling
+        if (Boolean.TRUE.equals(req.getCooling()) && !Boolean.TRUE.equals(cap.getCooling())) {
+            return false;
+        }
+
+        // Check heating
+        if (Boolean.TRUE.equals(req.getHeating()) && !Boolean.TRUE.equals(cap.getHeating())) {
+            return false;
+        }
+
+        if (req.getMaxCost() != null) {
+            double baseCost = (cap.getCostInitial() != null ? cap.getCostInitial() : 0.0) +
+                    (cap.getCostFinal() != null ? cap.getCostFinal() : 0.0);
+            if (baseCost >= req.getMaxCost()) {
+                return false;
+            }
+        }
+
+        if (dispatch.getDate() != null && dispatch.getTime() != null) {
+            List<Availability> slots = availabilityMap.get(drone.getId());
+            if (slots == null || slots.isEmpty()) {
+                return false;
+            }
+
+            String dayName = dispatch.getDate().getDayOfWeek().name();
+            boolean available = slots.stream().anyMatch(s ->
+                    s != null && s.getDayOfWeek() != null &&
+                            dayName.equals(s.getDayOfWeek().name()) &&
+                            s.getFrom() != null && s.getUntil() != null &&
+                            !dispatch.getTime().isBefore(s.getFrom()) &&
+                            !dispatch.getTime().isAfter(s.getUntil())
+            );
+
+            if (!available) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -184,6 +247,7 @@ public class DeliveryPathService {
      */
     private DronePath buildDronePath(Drone drone, DroneServicePoint sp,
                                      List<MedDispatchRec> dispatches, List<RestrictedArea> noFlyZones) {
+
         Capability cap = drone.getCapability();
         int maxMoves = cap.getMaxMoves() != null ? cap.getMaxMoves() : Integer.MAX_VALUE;
 
@@ -191,87 +255,74 @@ public class DeliveryPathService {
         List<Delivery> deliveries = new ArrayList<>();
         List<MedDispatchRec> selectedDispatches = new ArrayList<>();
 
-        double cost = cap.getCostInitial() != null ? cap.getCostInitial() : 0.0;
         double costPerMove = cap.getCostPerMove() != null ? cap.getCostPerMove() : 0.0;
+        double costInitial = cap.getCostInitial() != null ? cap.getCostInitial() : 0.0;
+        double costFinal = cap.getCostFinal() != null ? cap.getCostFinal() : 0.0;
+
 
         // Sort dispatches by nearest neighbor for efficiency
         List<MedDispatchRec> sorted = sortByNearest(currentPosition, dispatches);
 
-        // ========================================
-        // PHASE 1: PRE-SELECT deliveries that fit within maxMoves AND maxCost
-        // ========================================
         int estimatedMoves = 0;
+        int deliveryNum = 0;
 
         for (MedDispatchRec dispatch : sorted) {
+            deliveryNum++;
+
             LngLatAlt dest = dispatch.getDelivery();
-            if (dest == null) continue;
 
-            // ✅ FIX 1: Check if delivery location is in no-fly zone
-            if (isInNoFlyZone(dest.getLng(), dest.getLat(), noFlyZones)) {
-                System.out.println("WARNING: Delivery " + dispatch.getId() +
-                        " is inside no-fly zone at (" + dest.getLng() + ", " +
-                        dest.getLat() + ") - SKIPPING");
-                continue;
-            }
+            double straightLineDistToDelivery = distance(currentPosition, dest);
+            double straightLineDistBack = distance(dest, sp.getLocation());
+            double totalStraightLineDist = straightLineDistToDelivery + straightLineDistBack;
 
-            // Calculate path to this delivery
-            List<LngLatAlt> pathToDelivery = findPathAStar(currentPosition, dest, noFlyZones);
-            if (pathToDelivery.isEmpty()) {
-                System.out.println("WARNING: No path found to delivery " + dispatch.getId() + " - SKIPPING");
-                continue;
-            }
+            int estimatedMinMoves = (int)Math.ceil(totalStraightLineDist / MOVE_DISTANCE);
 
-            // Moves = path points - 1 (first point is current position)
-            int movesToDelivery = pathToDelivery.size() - 1;
-            int hoverMove = 1; // One move for hovering
-
-            // Calculate return path from THIS delivery to service point
-            List<LngLatAlt> pathBack = findPathAStar(dest, sp.getLocation(), noFlyZones);
-            if (pathBack.isEmpty()) {
-                System.out.println("WARNING: No return path from delivery " + dispatch.getId() + " - SKIPPING");
-                continue;
-            }
-
-            int movesBack = pathBack.size() - 1;
-
-            // Check if adding this delivery would exceed maxMoves
-            if (estimatedMoves + movesToDelivery + hoverMove + movesBack > maxMoves) {
-                System.out.println("Skipping delivery " + dispatch.getId() +
-                        " - would exceed maxMoves (" + maxMoves + ")");
-                continue;
-            }
-
-            // ✅ FIX 2: Check maxCost constraint
+            // Quick cost check based on straight-line distance
             if (dispatch.getRequirements() != null &&
                     dispatch.getRequirements().getMaxCost() != null) {
 
-                double estimatedTotalMoves = estimatedMoves + movesToDelivery + hoverMove + movesBack;
-                double estimatedCost = (cap.getCostInitial() != null ? cap.getCostInitial() : 0.0) +
-                        (estimatedTotalMoves * costPerMove) +
-                        (cap.getCostFinal() != null ? cap.getCostFinal() : 0.0);
+                double estimatedMinCost = costInitial +
+                        ((estimatedMoves + estimatedMinMoves) * costPerMove) +
+                        costFinal;
 
-                if (estimatedCost > dispatch.getRequirements().getMaxCost()) {
-                    System.out.println("Skipping delivery " + dispatch.getId() +
-                            " - estimated cost " + String.format("%.2f", estimatedCost) +
-                            " exceeds maxCost " + dispatch.getRequirements().getMaxCost());
-                    continue;
-                }
+            }
+
+            List<LngLatAlt> pathToDelivery = findPathAStar(currentPosition, dest, noFlyZones);
+
+
+            int movesToDelivery = pathToDelivery.size() - 1;
+            int hoverMove = 1; // One move for hovering
+
+            List<LngLatAlt> pathBack = findPathAStar(dest, sp.getLocation(), noFlyZones);
+
+            int movesBack = pathBack.size() - 1;
+
+            int totalMovesWithThis = estimatedMoves + movesToDelivery + hoverMove + movesBack;
+
+
+            // Check maxCost constraint
+            if (dispatch.getRequirements() != null &&
+                    dispatch.getRequirements().getMaxCost() != null) {
+
+                double totalCostWithThisDelivery = costInitial +
+                        (totalMovesWithThis * costPerMove) +
+                        costFinal;
+
+
             }
 
             // Accept this delivery
             selectedDispatches.add(dispatch);
             estimatedMoves += movesToDelivery + hoverMove;
 
-            // Update current position to the "close enough" point we'll reach
-            // (This is the hover position, not the exact delivery coordinates)
             if (!pathToDelivery.isEmpty()) {
                 currentPosition = pathToDelivery.get(pathToDelivery.size() - 1);
             }
         }
 
-        // ========================================
-        // PHASE 2: BUILD actual flight paths with correct structure
-        // ========================================
+
+
+
         if (!selectedDispatches.isEmpty()) {
             LngLatAlt currentHoverPosition = sp.getLocation();
             int totalDeliveries = selectedDispatches.size();
@@ -281,69 +332,50 @@ public class DeliveryPathService {
                 LngLatAlt dest = dispatch.getDelivery();
                 boolean isLastDelivery = (i == totalDeliveries - 1);
 
+
                 List<LngLatAlt> flightPath = new ArrayList<>();
 
-                // Step 1: Path from current hover position to this delivery
                 List<LngLatAlt> pathToDelivery = findPathAStar(currentHoverPosition, dest, noFlyZones);
 
-                if (pathToDelivery.isEmpty()) {
-                    System.out.println("Warning: Path to delivery " + dispatch.getId() + " is empty during build phase");
-                    continue;
-                }
 
                 // Add all points from the path
                 flightPath.addAll(pathToDelivery);
 
-                // Step 2: Add hover at delivery location (duplicate last point)
                 LngLatAlt deliveryPoint = flightPath.get(flightPath.size() - 1);
                 flightPath.add(new LngLatAlt(deliveryPoint.getLng(), deliveryPoint.getLat()));
 
-                // Update hover position for next iteration
                 currentHoverPosition = deliveryPoint;
 
-                // Step 3: If this is the LAST delivery, add return journey to service point
                 if (isLastDelivery) {
                     List<LngLatAlt> returnPath = findPathAStar(currentHoverPosition, sp.getLocation(), noFlyZones);
 
                     if (!returnPath.isEmpty()) {
-                        // Add return path points (skip first point as it's same as current hover position)
                         for (int j = 1; j < returnPath.size(); j++) {
                             flightPath.add(returnPath.get(j));
                         }
-                    } else {
-                        System.out.println("Warning: Return path from delivery " + dispatch.getId() + " is empty");
                     }
                 }
+
 
                 // Create and add the delivery
                 deliveries.add(new Delivery(dispatch.getId(), flightPath));
             }
         }
 
-        // ========================================
-        // PHASE 3: Calculate total moves and cost
-        // ========================================
+
         int totalMoves = 0;
         for (Delivery d : deliveries) {
             int pathMoves = d.getFlightPath().size() - 1; // Points to moves conversion
             totalMoves += pathMoves;
         }
 
-        cost += totalMoves * costPerMove;
-        cost += cap.getCostFinal() != null ? cap.getCostFinal() : 0.0;
+        double cost = costInitial + (totalMoves * costPerMove) + costFinal;
 
-        // ========================================
-        // PHASE 4: Create and return DronePath
-        // ========================================
         DronePath path = new DronePath();
         path.setDroneId(drone.getId());
         path.setDeliveries(deliveries);
         path.setMoves(totalMoves);
         path.setCost(cost);
-
-        System.out.println("Built drone path: " + drone.getId() +
-                " with " + deliveries.size() + " deliveries, " +
-                totalMoves + " moves, cost: " + String.format("%.2f", cost));
 
         return path;
     }
@@ -379,31 +411,29 @@ public class DeliveryPathService {
      * A* pathfinding algorithm to find optimal path avoiding no-fly zones
      */
     private List<LngLatAlt> findPathAStar(LngLatAlt from, LngLatAlt to, List<RestrictedArea> noFlyZones) {
-        System.out.println("findPathAStar called:");
-        System.out.println("  From: " + from.getLng() + ", " + from.getLat());
-        System.out.println("  To: " + to.getLng() + ", " + to.getLat());
 
-        // ✅ FIX 3: Check if destination is inside no-fly zone
+        // Check if destination is inside no-fly zone
         if (isInNoFlyZone(to.getLng(), to.getLat(), noFlyZones)) {
-            System.out.println("  ERROR: Destination is inside no-fly zone!");
             return Collections.emptyList();
         }
 
-        // ✅ FIX 4: Check if start is inside no-fly zone
+        // Check if start is inside no-fly zone
         if (isInNoFlyZone(from.getLng(), from.getLat(), noFlyZones)) {
-            System.out.println("  ERROR: Start position is inside no-fly zone!");
             return Collections.emptyList();
         }
 
         double initialDistance = distance(from, to);
-        System.out.println("  Initial distance: " + initialDistance);
-        System.out.println("  Estimated steps: " + (int)(initialDistance / MOVE_DISTANCE));
 
-        // Check if we're already close enough
+        // Check if already close enough
         if (initialDistance < CLOSE_ENOUGH_THRESHOLD) {
             List<LngLatAlt> result = new ArrayList<>();
             result.add(new LngLatAlt(from.getLng(), from.getLat()));
             return result;
+        }
+
+        List<LngLatAlt> directPath = tryDirectPath(from, to, noFlyZones);
+        if (!directPath.isEmpty()) {
+            return directPath;
         }
 
         PriorityQueue<PathNode> openSet = new PriorityQueue<>();
@@ -414,20 +444,14 @@ public class DeliveryPathService {
         openSet.add(startNode);
         bestGCost.put(startNode.key(), 0.0);
 
-        // ✅ FIX 5: Increase max iterations and scale with complexity
         int estimatedSteps = (int)(initialDistance / MOVE_DISTANCE);
-        int complexityFactor = (noFlyZones != null && !noFlyZones.isEmpty()) ? 100 : 50;
-        int maxIterations = Math.max(100000, estimatedSteps * complexityFactor);
-        System.out.println("  A* max iterations: " + maxIterations +
-                " (estimated steps: " + estimatedSteps +
-                ", complexity factor: " + complexityFactor + ")");
+        // Reduced limits for faster performance
+        int maxIterations = Math.min(20000, Math.max(5000, estimatedSteps * 25));
+
 
         int iter = 0;
-
-        // ✅ FIX 6: Add diagnostic counters
         int nodesExplored = 0;
-        int nodesGenerated = 0;
-        double bestDistanceAchieved = initialDistance;
+        int invalidMoves = 0;
 
         while (!openSet.isEmpty() && iter++ < maxIterations) {
             PathNode current = openSet.poll();
@@ -436,24 +460,17 @@ public class DeliveryPathService {
             // Check if we reached the goal (or close enough)
             double distToGoal = distance(current.lng, current.lat, to.getLng(), to.getLat());
 
-            // ✅ FIX 7: Track best distance
-            if (distToGoal < bestDistanceAchieved) {
-                bestDistanceAchieved = distToGoal;
-            }
-
             if (distToGoal < CLOSE_ENOUGH_THRESHOLD) {
-                // ✅ FIX 8: Success logging
-                System.out.println("  ✓ A* SUCCESS in " + iter + " iterations");
-                System.out.println("    Explored: " + nodesExplored + ", Generated: " + nodesGenerated);
-
                 // Reconstruct path
                 List<LngLatAlt> path = new ArrayList<>();
                 PathNode node = current;
+                int pathLength = 0;
                 while (node != null) {
                     path.add(0, new LngLatAlt(node.lng, node.lat));
                     node = node.parent;
+                    pathLength++;
                 }
-                System.out.println("  Path found with " + path.size() + " points");
+
                 return path;
             }
 
@@ -474,11 +491,9 @@ public class DeliveryPathService {
 
                 // Check if this position is valid (not in no-fly zone and no edge crossing)
                 if (!isValidMove(current.lng, current.lat, newLng, newLat, noFlyZones)) {
+                    invalidMoves++;
                     continue;
                 }
-
-                // ✅ FIX 9: Count generated nodes
-                nodesGenerated++;
 
                 double newGCost = current.gCost + MOVE_DISTANCE;
                 double hCost = distance(newLng, newLat, to.getLng(), to.getLat());
@@ -490,38 +505,19 @@ public class DeliveryPathService {
                     openSet.add(neighbor);
                 }
             }
-
-            // Progress logging every 10000 iterations
-            if (iter % 10000 == 0) {
-                System.out.println("  A* iter " + iter + ": openSet=" + openSet.size() +
-                        ", closedSet=" + closedSet.size() +
-                        ", best dist=" + String.format("%.6f", bestDistanceAchieved) +
-                        ", generated=" + nodesGenerated);
-            }
         }
 
-        // ✅ FIX 10: Failure logging with diagnostics
-        System.out.println("  ✗ A* FAILED after " + iter + " iterations");
-        System.out.println("    Nodes explored: " + nodesExplored);
-        System.out.println("    Nodes generated: " + nodesGenerated);
-        System.out.println("    Best distance: " + String.format("%.6f", bestDistanceAchieved));
-        System.out.println("    Initial distance: " + String.format("%.6f", initialDistance));
-        System.out.println("    Progress: " + String.format("%.1f%%",
-                (1.0 - bestDistanceAchieved/initialDistance) * 100));
-        System.out.println("    OpenSet size: " + openSet.size());
-        System.out.println("    ClosedSet size: " + closedSet.size());
 
         // Try greedy fallback
-        System.out.println("  → Trying greedy fallback...");
         return findPathGreedy(from, to, noFlyZones);
     }
 
     /**
-     * Greedy pathfinding fallback - faster but not optimal
-     * Used when A* fails due to complexity
+     * Greedy pathfinding fallback with obstacle avoidance
+     * Uses tangent-line navigation around obstacles to prevent zigzagging
      */
     private List<LngLatAlt> findPathGreedy(LngLatAlt from, LngLatAlt to, List<RestrictedArea> noFlyZones) {
-        System.out.println("  → Greedy pathfinding (A* fallback):");
+
         List<LngLatAlt> path = new ArrayList<>();
         path.add(new LngLatAlt(from.getLng(), from.getLat()));
 
@@ -530,14 +526,21 @@ public class DeliveryPathService {
         double targetLng = to.getLng();
         double targetLat = to.getLat();
 
-        int maxIterations = 100000; // Much higher for greedy
+        double initialDistance = distance(currLng, currLat, targetLng, targetLat);
+        int estimatedSteps = (int)(initialDistance / MOVE_DISTANCE);
+
+        int maxIterations = Math.min(50000, Math.max(5000, estimatedSteps * 3));
         int iter = 0;
         int stuckCounter = 0;
-        double lastDistance = distance(currLng, currLat, targetLng, targetLat);
+        int invalidMoves = 0;
+        double lastDistance = initialDistance;
+        Set<String> visited = new HashSet<>();
 
         while (distance(currLng, currLat, targetLng, targetLat) > CLOSE_ENOUGH_THRESHOLD && iter++ < maxIterations) {
             double bestAngle = -1;
             double bestDist = Double.MAX_VALUE;
+            double secondBestAngle = -1;
+            double secondBestDist = Double.MAX_VALUE;
 
             // Try all 16 directions
             for (double angle : VALID_ANGLES) {
@@ -545,43 +548,100 @@ public class DeliveryPathService {
                 double newLng = currLng + MOVE_DISTANCE * Math.cos(rad);
                 double newLat = currLat + MOVE_DISTANCE * Math.sin(rad);
 
-                if (!isValidMove(currLng, currLat, newLng, newLat, noFlyZones)) continue;
+                String posKey = String.format("%.8f,%.8f", newLng, newLat);
 
+                if (!isValidMove(currLng, currLat, newLng, newLat, noFlyZones)) {
+                    invalidMoves++;
+                    continue;
+                }
+
+                // Penalize revisiting same positions
                 double dist = distance(newLng, newLat, targetLng, targetLat);
+                if (visited.contains(posKey)) {
+                    dist += 0.01; // Add penalty for revisiting
+                }
+
                 if (dist < bestDist) {
+                    secondBestDist = bestDist;
+                    secondBestAngle = bestAngle;
                     bestDist = dist;
                     bestAngle = angle;
+                } else if (dist < secondBestDist) {
+                    secondBestDist = dist;
+                    secondBestAngle = angle;
                 }
             }
 
             if (bestAngle < 0) {
-                System.out.println("  Greedy stuck at iteration " + iter + " - no valid moves!");
                 return Collections.emptyList();
             }
 
-            // Check if we're making progress
-            if (bestDist >= lastDistance - 0.0000001) { // Not making progress
+            if (bestDist >= lastDistance - 0.000001) {
                 stuckCounter++;
                 if (stuckCounter > 100) {
-                    System.out.println("  Greedy appears stuck - not making progress");
                     return Collections.emptyList();
                 }
+
+                if (stuckCounter > 20 && secondBestAngle >= 0) {
+                    bestAngle = secondBestAngle;
+                    bestDist = secondBestDist;
+                }
             } else {
-                stuckCounter = 0; // Reset if we made progress
+                stuckCounter = 0;
             }
             lastDistance = bestDist;
 
             double rad = Math.toRadians(bestAngle);
             currLng += MOVE_DISTANCE * Math.cos(rad);
             currLat += MOVE_DISTANCE * Math.sin(rad);
-            path.add(new LngLatAlt(currLng, currLat));
 
-            if (iter % 1000 == 0) {
-                System.out.println("  Greedy iteration " + iter + ", distance: " + String.format("%.6f", bestDist));
-            }
+            String posKey = String.format("%.8f,%.8f", currLng, currLat);
+            visited.add(posKey);
+            path.add(new LngLatAlt(currLng, currLat));
         }
 
-        System.out.println("  ✓ Greedy path found with " + path.size() + " points");
+        if (iter >= maxIterations) {
+            return Collections.emptyList();
+        }
+
+        return path;
+    }
+
+    /**
+     * Try a direct path first - if no obstacles, this is optimal
+     * This dramatically improves performance for unobstructed paths
+     */
+    private List<LngLatAlt> tryDirectPath(LngLatAlt from, LngLatAlt to, List<RestrictedArea> noFlyZones) {
+        double dx = to.getLng() - from.getLng();
+        double dy = to.getLat() - from.getLat();
+        double dist = Math.sqrt(dx * dx + dy * dy);
+
+        int steps = (int) Math.ceil(dist / MOVE_DISTANCE);
+        if (steps == 0) return Collections.emptyList();
+
+        double stepLng = dx / steps;
+        double stepLat = dy / steps;
+
+        List<LngLatAlt> path = new ArrayList<>();
+        path.add(new LngLatAlt(from.getLng(), from.getLat()));
+
+        double currLng = from.getLng();
+        double currLat = from.getLat();
+
+        for (int i = 0; i < steps; i++) {
+            double nextLng = currLng + stepLng;
+            double nextLat = currLat + stepLat;
+
+            // Check if this move is valid
+            if (!isValidMove(currLng, currLat, nextLng, nextLat, noFlyZones)) {
+                return Collections.emptyList(); // Direct path blocked
+            }
+
+            path.add(new LngLatAlt(nextLng, nextLat));
+            currLng = nextLng;
+            currLat = nextLat;
+        }
+
         return path;
     }
 
@@ -608,18 +668,32 @@ public class DeliveryPathService {
      * Check if a point is inside any no-fly zone (with altitude consideration)
      */
     private boolean isInNoFlyZone(double lng, double lat, List<RestrictedArea> zones) {
-        if (zones == null) return false;
+        if (zones == null || zones.isEmpty()) {
+            return false;
+        }
 
-        for (RestrictedArea zone : zones) {
+        for (int i = 0; i < zones.size(); i++) {
+            RestrictedArea zone = zones.get(i);
+            if (zone == null) {
+                continue;
+            }
+
+            List<LngLatAlt> vertices = zone.getVertices();
+            if (vertices == null || vertices.size() < 3) {
+                continue;
+            }
+
             // Check altitude first (assuming drone altitude is 0 for simplicity)
             // If your drones have altitude, you need to check:
             // if (droneAltitude >= zone.getLimits().getLower() &&
             //     droneAltitude <= zone.getLimits().getUpper())
 
-            if (isPointInPolygon(lng, lat, zone.getVertices())) {
+            boolean inPolygon = isPointInPolygon(lng, lat, vertices);
+            if (inPolygon) {
                 return true;
             }
         }
+
         return false;
     }
 
@@ -710,8 +784,6 @@ public class DeliveryPathService {
                 .average()
                 .orElse(0);
 
-        System.out.println("GeoJSON: Delivery centroid: (" + avgLng + ", " + avgLat + ")");
-
         // Find nearest service point with available drones
         String selectedDroneId = null;
         DroneServicePoint selectedSP = null;
@@ -725,7 +797,6 @@ public class DeliveryPathService {
             if (sp == null || sp.getLocation() == null) continue;
 
             double dist = distance(sp.getLocation().getLng(), sp.getLocation().getLat(), avgLng, avgLat);
-            System.out.println("  SP: " + sp.getName() + " at distance: " + dist);
 
             if (dist < nearestDistance) {
                 nearestDistance = dist;
@@ -735,11 +806,8 @@ public class DeliveryPathService {
         }
 
         if (selectedDroneId == null || selectedSP == null) {
-            System.out.println("GeoJSON: No suitable drone/SP found");
             return createEmptyGeoJson();
         }
-
-        System.out.println("GeoJSON: Selected SP: " + selectedSP.getName() + " (distance: " + nearestDistance + ")");
 
         Drone drone = droneMap.get(selectedDroneId);
         if (drone == null || drone.getCapability() == null) {
@@ -764,7 +832,6 @@ public class DeliveryPathService {
             List<LngLatAlt> pathToDelivery = findPathAStar(currentHoverPosition, dest, noFlyZones);
 
             if (pathToDelivery.isEmpty()) {
-                System.out.println("GeoJSON: No path to delivery " + dispatch.getId());
                 continue;
             }
 
@@ -778,7 +845,6 @@ public class DeliveryPathService {
             if (!pathToDelivery.isEmpty()) {
                 LngLatAlt deliveryPoint = pathToDelivery.get(pathToDelivery.size() - 1);
                 coordinates.add(new double[]{deliveryPoint.getLng(), deliveryPoint.getLat()});
-                System.out.println("GeoJSON: Added hover at delivery " + dispatch.getId());
                 currentHoverPosition = deliveryPoint;
             }
 
@@ -789,11 +855,9 @@ public class DeliveryPathService {
                     LngLatAlt point = returnPath.get(j);
                     coordinates.add(new double[]{point.getLng(), point.getLat()});
                 }
-                System.out.println("GeoJSON: Added return path");
             }
         }
 
-        System.out.println("GeoJSON: Total coordinates: " + coordinates.size());
         return createGeoJsonLineString(coordinates);
     }
 

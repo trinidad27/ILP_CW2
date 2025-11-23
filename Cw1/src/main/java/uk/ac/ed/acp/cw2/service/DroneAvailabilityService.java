@@ -35,9 +35,6 @@ public class DroneAvailabilityService {
         Map<String, Drone> droneMap = allDrones.stream()
                 .collect(Collectors.toMap(Drone::getId, d -> d));
 
-        System.out.println("Initial candidates: " + candidates);
-        System.out.println(dispatches.getFirst().getRequirements().getCooling());
-        System.out.println(dispatches.getLast().getRequirements().getCooling());
 
         for (MedDispatchRec dispatch : dispatches) {
             if (candidates.isEmpty()) break;
@@ -46,32 +43,24 @@ public class DroneAvailabilityService {
             if (dispatch.getRequirements() != null) {
                 Set<String> beforeCap = new HashSet<>(candidates);
                 candidates.removeIf(id -> !matchesCapability(droneMap.get(id), dispatch.getRequirements()));
-                System.out.println("After capability filter: " + candidates);
-                System.out.println("Removed by capability: " + beforeCap.stream().filter(id -> !candidates.contains(id)).collect(Collectors.toList()));
             }
 
             // Filter by availability
             if (dispatch.getDate() != null && dispatch.getTime() != null) {
                 DayOfWeek day = dispatch.getDate().getDayOfWeek();
                 LocalTime time = dispatch.getTime();
-                System.out.println("Checking availability for: " + day + " at " + time);
 
                 Set<String> beforeAvail = new HashSet<>(candidates);
                 candidates.removeIf(id -> !isAvailableAt(availabilityMap.get(id), day, time));
-                System.out.println("After availability filter: " + candidates);
-                System.out.println("Removed by availability: " + beforeAvail.stream().filter(id -> !candidates.contains(id)).collect(Collectors.toList()));
             }
 
             // Filter by cost
             if (dispatch.getRequirements() != null && dispatch.getRequirements().getMaxCost() != null) {
                 Set<String> beforeCost = new HashSet<>(candidates);
                 candidates.removeIf(id -> !meetsCost(droneMap.get(id), dispatch.getRequirements().getMaxCost()));
-                System.out.println("After cost filter: " + candidates);
-                System.out.println("Removed by cost: " + beforeCost.stream().filter(id -> !candidates.contains(id)).collect(Collectors.toList()));
             }
         }
 
-        System.out.println("Final candidates: " + candidates);
         return new ArrayList<>(candidates);
     }
 
@@ -79,26 +68,15 @@ public class DroneAvailabilityService {
         if (drone == null || drone.getCapability() == null) return false;
         Capability cap = drone.getCapability();
 
-        System.out.println("Checking drone " + drone.getId() +
-                " - cap.capacity=" + cap.getCapacity() +
-                ", cap.cooling=" + cap.getCooling() +
-                ", cap.heating=" + cap.getHeating() +
-                ", req.capacity=" + req.getCapacity() +
-                ", req.cooling=" + req.getCooling() +
-                ", req.heating=" + req.getHeating());
-
         if (req.getCapacity() != null && cap.getCapacity() != null) {
             if (cap.getCapacity() < req.getCapacity()) {
-                System.out.println("  -> FAILED capacity check");
                 return false;
             }
         }
         if (Boolean.TRUE.equals(req.getCooling()) && !Boolean.TRUE.equals(cap.getCooling())) {
-            System.out.println("  -> FAILED cooling check");
             return false;
         }
         if (Boolean.TRUE.equals(req.getHeating()) && !Boolean.TRUE.equals(cap.getHeating())) {
-            System.out.println("  -> FAILED heating check");
             return false;
         }
         return true;
