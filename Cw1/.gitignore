@@ -1,0 +1,17 @@
+# IntelliJ / Eclipse / VSCode
+.idea/
+*.iml
+target/
+bin/
+out/
+
+# Logs
+*.log
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Java compiled classes
+*.class
+*.tar

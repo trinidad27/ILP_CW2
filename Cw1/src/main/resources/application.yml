@@ -1,0 +1,34 @@
+spring:
+  application:
+    name: IlpTutorial_1
+
+
+info:
+  app:
+    name: ILP REST Service
+    description: Simple ILP Rest Service
+    version: 0.0.1
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: info, health, env
+  info:
+    env:
+      enabled: true
+
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+
+server:
+  port: 8080
+
+
+
+ilp:
+  service:
+    url: https://ilp-rest-2025-bvh6e9hschfagrgy.ukwest-01.azurewebsites.net/
