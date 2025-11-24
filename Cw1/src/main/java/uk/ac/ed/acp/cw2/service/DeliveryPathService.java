@@ -84,7 +84,7 @@ public class DeliveryPathService {
         for (Map.Entry<Integer, Set<String>> entry : dronesPerSP.entrySet()) {
             dronesByServicePoint.put(entry.getKey(), new ArrayList<>(entry.getValue()));
         }
-
+//
         // Track which drones have been used
         Set<String> usedDrones = new HashSet<>();
 
