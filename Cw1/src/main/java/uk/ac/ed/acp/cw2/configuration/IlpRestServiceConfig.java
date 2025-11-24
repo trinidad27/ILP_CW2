@@ -21,4 +21,9 @@ public class IlpRestServiceConfig {
             return env;
         };
     }
+
+    @Bean
+    public RestTemplate restTemplate() {
+        return new RestTemplate();
+    }
 }

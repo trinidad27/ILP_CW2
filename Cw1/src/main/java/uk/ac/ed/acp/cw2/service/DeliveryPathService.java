@@ -61,7 +61,7 @@ public class DeliveryPathService {
             return new DeliveryPathResponse(0.0, 0, Collections.emptyList());
         }
 
-        // Fetch data fresh every time
+        // Fetch data every time
         List<Drone> allDrones = droneAvailabilityService.fetchAllDrones();
 
         Map<String, Drone> droneMap = allDrones.stream()
@@ -140,7 +140,7 @@ public class DeliveryPathService {
             }
 
             if (nearestSpId == null || selectedDroneId == null) {
-                break; // No more suitable drones available
+                break; // No more drones available
             }
 
             DroneServicePoint sp = servicePoints.get(nearestSpId);
@@ -149,7 +149,7 @@ public class DeliveryPathService {
             DronePath path = buildDronePath(drone, sp, remaining, noFlyZones);
 
             if (!path.getDeliveries().isEmpty()) {
-                // Path was successful, add it
+                // Path was successful
                 dronePaths.add(path);
                 totalCost += path.getCost();
                 totalMoves += path.getMoves();
@@ -161,7 +161,6 @@ public class DeliveryPathService {
                 // Mark drone as used
                 usedDrones.add(selectedDroneId);
             } else {
-
                 usedDrones.add(selectedDroneId);
             }
         }
@@ -182,7 +181,7 @@ public class DeliveryPathService {
         Requirements req = dispatch.getRequirements();
 
         if (req == null) {
-            return true;
+            return true; // No requirements means any drone can handle it
         }
 
         // Check capacity
@@ -192,16 +191,17 @@ public class DeliveryPathService {
             }
         }
 
-        // Check cooling
+        // Check cooling - only fail if cooling is required but drone doesn't have it
         if (Boolean.TRUE.equals(req.getCooling()) && !Boolean.TRUE.equals(cap.getCooling())) {
             return false;
         }
 
-        // Check heating
+        // Check heating - only fail if heating is required but drone doesn't have it
         if (Boolean.TRUE.equals(req.getHeating()) && !Boolean.TRUE.equals(cap.getHeating())) {
             return false;
         }
 
+        // Check basic cost constraint (initial + final must be less than maxCost)
         if (req.getMaxCost() != null) {
             double baseCost = (cap.getCostInitial() != null ? cap.getCostInitial() : 0.0) +
                     (cap.getCostFinal() != null ? cap.getCostFinal() : 0.0);
@@ -210,6 +210,7 @@ public class DeliveryPathService {
             }
         }
 
+        // Check availability if date/time is specified
         if (dispatch.getDate() != null && dispatch.getTime() != null) {
             List<Availability> slots = availabilityMap.get(drone.getId());
             if (slots == null || slots.isEmpty()) {
@@ -238,7 +239,7 @@ public class DeliveryPathService {
      *
      * Key requirements:
      * - Each delivery's flightPath goes from previous position to delivery location with hover
-     * - LAST delivery's flightPath includes the return journey to service point
+     * - Last delivery's flightPath includes the return journey to service point
      * - No separate return journey delivery (no deliveryId: null)
      * - Hover = duplicate coordinate (counts as 1 move)
      * - No hover at service point
@@ -259,7 +260,6 @@ public class DeliveryPathService {
         double costInitial = cap.getCostInitial() != null ? cap.getCostInitial() : 0.0;
         double costFinal = cap.getCostFinal() != null ? cap.getCostFinal() : 0.0;
 
-
         // Sort dispatches by nearest neighbor for efficiency
         List<MedDispatchRec> sorted = sortByNearest(currentPosition, dispatches);
 
@@ -271,25 +271,9 @@ public class DeliveryPathService {
 
             LngLatAlt dest = dispatch.getDelivery();
 
-            double straightLineDistToDelivery = distance(currentPosition, dest);
-            double straightLineDistBack = distance(dest, sp.getLocation());
-            double totalStraightLineDist = straightLineDistToDelivery + straightLineDistBack;
-
-            int estimatedMinMoves = (int)Math.ceil(totalStraightLineDist / MOVE_DISTANCE);
-
-            // Quick cost check based on straight-line distance
-            if (dispatch.getRequirements() != null &&
-                    dispatch.getRequirements().getMaxCost() != null) {
-
-                double estimatedMinCost = costInitial +
-                        ((estimatedMoves + estimatedMinMoves) * costPerMove) +
-                        costFinal;
-
-            }
-
             List<LngLatAlt> pathToDelivery = findPathAStar(currentPosition, dest, noFlyZones);
 
-
+            // Moves = path points - 1 (first point is current position)
             int movesToDelivery = pathToDelivery.size() - 1;
             int hoverMove = 1; // One move for hovering
 
@@ -297,6 +281,7 @@ public class DeliveryPathService {
 
             int movesBack = pathBack.size() - 1;
 
+            // Check if adding this delivery would exceed maxMoves
             int totalMovesWithThis = estimatedMoves + movesToDelivery + hoverMove + movesBack;
 
 
@@ -308,19 +293,17 @@ public class DeliveryPathService {
                         (totalMovesWithThis * costPerMove) +
                         costFinal;
 
-
             }
 
             // Accept this delivery
             selectedDispatches.add(dispatch);
             estimatedMoves += movesToDelivery + hoverMove;
 
+            // Update current position to the "close enough" point we'll reach
             if (!pathToDelivery.isEmpty()) {
                 currentPosition = pathToDelivery.get(pathToDelivery.size() - 1);
             }
         }
-
-
 
 
         if (!selectedDispatches.isEmpty()) {
@@ -332,36 +315,36 @@ public class DeliveryPathService {
                 LngLatAlt dest = dispatch.getDelivery();
                 boolean isLastDelivery = (i == totalDeliveries - 1);
 
-
                 List<LngLatAlt> flightPath = new ArrayList<>();
 
                 List<LngLatAlt> pathToDelivery = findPathAStar(currentHoverPosition, dest, noFlyZones);
 
-
                 // Add all points from the path
                 flightPath.addAll(pathToDelivery);
 
+                // Add hover at delivery location
                 LngLatAlt deliveryPoint = flightPath.get(flightPath.size() - 1);
                 flightPath.add(new LngLatAlt(deliveryPoint.getLng(), deliveryPoint.getLat()));
 
+                // Update hover position for next iteration
                 currentHoverPosition = deliveryPoint;
 
+                // Adding return journey only for last delivery
                 if (isLastDelivery) {
                     List<LngLatAlt> returnPath = findPathAStar(currentHoverPosition, sp.getLocation(), noFlyZones);
 
                     if (!returnPath.isEmpty()) {
+                        // Add return path points (skip first point as it's same as current hover position)
                         for (int j = 1; j < returnPath.size(); j++) {
                             flightPath.add(returnPath.get(j));
                         }
                     }
                 }
 
-
                 // Create and add the delivery
                 deliveries.add(new Delivery(dispatch.getId(), flightPath));
             }
         }
-
 
         int totalMoves = 0;
         for (Delivery d : deliveries) {
@@ -424,17 +407,13 @@ public class DeliveryPathService {
 
         double initialDistance = distance(from, to);
 
-        // Check if already close enough
+        // Check if we're already close enough
         if (initialDistance < CLOSE_ENOUGH_THRESHOLD) {
             List<LngLatAlt> result = new ArrayList<>();
             result.add(new LngLatAlt(from.getLng(), from.getLat()));
             return result;
         }
 
-        List<LngLatAlt> directPath = tryDirectPath(from, to, noFlyZones);
-        if (!directPath.isEmpty()) {
-            return directPath;
-        }
 
         PriorityQueue<PathNode> openSet = new PriorityQueue<>();
         Map<String, PathNode> closedSet = new HashMap<>();
@@ -445,9 +424,7 @@ public class DeliveryPathService {
         bestGCost.put(startNode.key(), 0.0);
 
         int estimatedSteps = (int)(initialDistance / MOVE_DISTANCE);
-        // Reduced limits for faster performance
         int maxIterations = Math.min(20000, Math.max(5000, estimatedSteps * 25));
-
 
         int iter = 0;
         int nodesExplored = 0;
@@ -457,7 +434,6 @@ public class DeliveryPathService {
             PathNode current = openSet.poll();
             nodesExplored++;
 
-            // Check if we reached the goal (or close enough)
             double distToGoal = distance(current.lng, current.lat, to.getLng(), to.getLat());
 
             if (distToGoal < CLOSE_ENOUGH_THRESHOLD) {
@@ -542,6 +518,9 @@ public class DeliveryPathService {
             double secondBestAngle = -1;
             double secondBestDist = Double.MAX_VALUE;
 
+            // Calculate direction to target for backward movement detection
+            double targetAngle = Math.toDegrees(Math.atan2(targetLat - currLat, targetLng - currLng));
+
             // Try all 16 directions
             for (double angle : VALID_ANGLES) {
                 double rad = Math.toRadians(angle);
@@ -555,10 +534,19 @@ public class DeliveryPathService {
                     continue;
                 }
 
-                // Penalize revisiting same positions
+                // Calculate distance to target
                 double dist = distance(newLng, newLat, targetLng, targetLat);
+
+                // Penalize revisiting same positions
                 if (visited.contains(posKey)) {
-                    dist += 0.01; // Add penalty for revisiting
+                    dist += 0.01;
+                }
+
+                // Penalize backward movement (moving away from target direction)
+                double angleDiff = Math.abs(angle - targetAngle);
+                if (angleDiff > 180) angleDiff = 360 - angleDiff;
+                if (angleDiff > 90) { // Moving more than 90 degrees away from target
+                    dist += 0.005; // Penalize backward movement
                 }
 
                 if (dist < bestDist) {
@@ -582,6 +570,7 @@ public class DeliveryPathService {
                     return Collections.emptyList();
                 }
 
+                // When stuck try second-best direction to escape local minimum
                 if (stuckCounter > 20 && secondBestAngle >= 0) {
                     bestAngle = secondBestAngle;
                     bestDist = secondBestDist;
@@ -592,8 +581,11 @@ public class DeliveryPathService {
             lastDistance = bestDist;
 
             double rad = Math.toRadians(bestAngle);
-            currLng += MOVE_DISTANCE * Math.cos(rad);
-            currLat += MOVE_DISTANCE * Math.sin(rad);
+            double newLng = currLng + MOVE_DISTANCE * Math.cos(rad);
+            double newLat = currLat + MOVE_DISTANCE * Math.sin(rad);
+
+            currLng = newLng;
+            currLat = newLat;
 
             String posKey = String.format("%.8f,%.8f", currLng, currLat);
             visited.add(posKey);
@@ -607,43 +599,6 @@ public class DeliveryPathService {
         return path;
     }
 
-    /**
-     * Try a direct path first - if no obstacles, this is optimal
-     * This dramatically improves performance for unobstructed paths
-     */
-    private List<LngLatAlt> tryDirectPath(LngLatAlt from, LngLatAlt to, List<RestrictedArea> noFlyZones) {
-        double dx = to.getLng() - from.getLng();
-        double dy = to.getLat() - from.getLat();
-        double dist = Math.sqrt(dx * dx + dy * dy);
-
-        int steps = (int) Math.ceil(dist / MOVE_DISTANCE);
-        if (steps == 0) return Collections.emptyList();
-
-        double stepLng = dx / steps;
-        double stepLat = dy / steps;
-
-        List<LngLatAlt> path = new ArrayList<>();
-        path.add(new LngLatAlt(from.getLng(), from.getLat()));
-
-        double currLng = from.getLng();
-        double currLat = from.getLat();
-
-        for (int i = 0; i < steps; i++) {
-            double nextLng = currLng + stepLng;
-            double nextLat = currLat + stepLat;
-
-            // Check if this move is valid
-            if (!isValidMove(currLng, currLat, nextLng, nextLat, noFlyZones)) {
-                return Collections.emptyList(); // Direct path blocked
-            }
-
-            path.add(new LngLatAlt(nextLng, nextLat));
-            currLng = nextLng;
-            currLat = nextLat;
-        }
-
-        return path;
-    }
 
     /**
      * Check if a move from (lng1, lat1) to (lng2, lat2) is valid
@@ -683,8 +638,6 @@ public class DeliveryPathService {
                 continue;
             }
 
-            // Check altitude first (assuming drone altitude is 0 for simplicity)
-            // If your drones have altitude, you need to check:
             // if (droneAltitude >= zone.getLimits().getLower() &&
             //     droneAltitude <= zone.getLimits().getUpper())
 
