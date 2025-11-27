@@ -19,6 +19,7 @@ import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/v1")
+@CrossOrigin(origins = "http://localhost:3000")
 public class DroneController {
     private final DroneService droneService;
     private final DroneAvailabilityService droneAvailabilityService;
@@ -99,6 +100,25 @@ public class DroneController {
     @PostMapping("/calcDeliveryPathAsGeoJson")
     public ResponseEntity<Map<String, Object>> calcDeliveryPathAsGeoJson(@Valid @RequestBody List<MedDispatchRec> dispatches) {
         return ResponseEntity.ok(deliveryPathService.calcDeliveryPathAsGeoJson(dispatches));
+    }
+
+
+    @PostMapping("deliveries")
+    public ResponseEntity<DeliveryPathResponse> scheduleDelivery(
+            @RequestBody List<MedDispatchRec> dispatches) {
+        DeliveryPathResponse response = deliveryPathService.calcDeliveryPath(dispatches);
+        return ResponseEntity.ok(
+                response
+        );
+    }
+
+    @PostMapping("/deliveries/preview")
+    public ResponseEntity<?> previewDelivery(
+            @RequestBody List<MedDispatchRec> dispatches) {
+        var geoJson = deliveryPathService.calcDeliveryPathAsGeoJson(dispatches);
+        return ResponseEntity.ok(
+                geoJson
+        );
     }
 
 }
