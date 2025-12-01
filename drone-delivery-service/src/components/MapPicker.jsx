@@ -1,13 +1,18 @@
-import React, { useState } from 'react';
-import { MapContainer, TileLayer, Marker, useMapEvents} from "react-leaflet";
+import React from 'react';
+import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
-delete L.icon.Default.prototype._getIconUrl;
+// Fix Leaflet default marker icons
+import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+
+delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
-    iconRetinaUrl: require('leaflet/dist/images/marker-icon-2x.png'),
-    iconUrl: require('leaflet/dist/images/marker-icon.png'),
-    shadowUrl: require('leaflet/dist/images/marker-shadow.png'),
+    iconRetinaUrl: markerIcon2x,
+    iconUrl: markerIcon,
+    shadowUrl: markerShadow,
 });
 
 const MapClickHandler = ({ onLocationSelect }) => {
@@ -21,7 +26,13 @@ const MapClickHandler = ({ onLocationSelect }) => {
 
 const MapPicker = ({ position, onLocationSelect }) => {
     return (
-        <div style={{ height: '400px', marginBottom: '1rem', borderRadius: '8px', overflow: 'hidden' }}>
+        <div style={{
+            height: '400px',
+            marginBottom: '1rem',
+            borderRadius: '8px',
+            overflow: 'hidden',
+            border: '2px solid #e0e0e0'
+        }}>
             <MapContainer
                 center={position || [55.9533, -3.1883]} // Edinburgh default
                 zoom={13}

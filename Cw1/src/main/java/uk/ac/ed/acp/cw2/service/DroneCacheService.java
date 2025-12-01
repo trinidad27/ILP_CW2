@@ -1,6 +1,8 @@
 package uk.ac.ed.acp.cw2.service;
 
+import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.stereotype.Service;
 import uk.ac.ed.acp.cw2.data.DroneStatus;
 
@@ -16,7 +18,7 @@ public class DroneCacheService {
     private static final String DRONE_STATUS_KEY_PREFIX = "drone:status:";
     private static final String ACTIVE_DRONES_KEY = "drones:active";
     private static final String DRONE_LOCATION_KEY = "drone:locations";
-    private static final long DEFAULT_TTL_SECONDS = 300; // 5 minutes
+    private static final long DEFAULT_TTL_SECONDS = 3600; // 5 minutes
 
     public DroneCacheService(RedisTemplate<String, Object> redisTemplate) {
         this.redisTemplate = redisTemplate;
@@ -51,12 +53,78 @@ public class DroneCacheService {
      */
     public DroneStatus getDroneStatus(String droneId) {
         String key = DRONE_STATUS_KEY_PREFIX + droneId;
+
         Object value = redisTemplate.opsForValue().get(key);
 
+        if (value == null) {
+            return null;
+        }
+
+
+        // Handle direct DroneStatus object
         if (value instanceof DroneStatus) {
             return (DroneStatus) value;
         }
+
+        // Handle LinkedHashMap (common Redis deserialization result)
+        if (value instanceof java.util.Map) {
+            return convertMapToDroneStatus((java.util.Map<?, ?>) value);
+        }
+
         return null;
+    }
+
+    private DroneStatus convertMapToDroneStatus(java.util.Map<?, ?> map) {
+        try {
+            DroneStatus status = new DroneStatus();
+
+            if (map.get("droneId") != null) {
+                status.setDroneId(map.get("droneId").toString());
+            }
+
+            if (map.get("status") != null) {
+                status.setStatus(map.get("status").toString());
+            }
+
+            if (map.get("currentLng") != null) {
+                status.setCurrentLng(Double.valueOf(map.get("currentLng").toString()));
+            }
+
+            if (map.get("currentLat") != null) {
+                status.setCurrentLat(Double.valueOf(map.get("currentLat").toString()));
+            }
+
+            if (map.get("batteryLevel") != null) {
+                status.setBatteryLevel(Double.valueOf(map.get("batteryLevel").toString()));
+            }
+
+            if (map.get("speed") != null) {
+                status.setSpeed(Double.valueOf(map.get("speed").toString()));
+            }
+
+            if (map.get("altitude") != null) {
+                status.setAltitude(Double.valueOf(map.get("altitude").toString()));
+            }
+
+            if (map.get("currentDeliveryId") != null) {
+                status.setCurrentDeliveryId(map.get("currentDeliveryId").toString());
+            }
+
+            if (map.get("lastUpdate") != null) {
+                String lastUpdateStr = map.get("lastUpdate").toString();
+                try {
+                    status.setLastUpdate(java.time.LocalDateTime.parse(lastUpdateStr));
+                } catch (Exception e) {
+                    status.setLastUpdate(java.time.LocalDateTime.now());
+                }
+            }
+
+            return status;
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
     }
 
     /**
@@ -148,7 +216,6 @@ public class DroneCacheService {
         redisTemplate.opsForSet().remove(ACTIVE_DRONES_KEY, droneId);
         redisTemplate.opsForGeo().remove(DRONE_LOCATION_KEY, droneId);
 
-        System.out.println("✓ Removed drone from cache: " + droneId);
     }
 
     /**
@@ -178,14 +245,32 @@ public class DroneCacheService {
     /**
      * Clear all drone cache (for testing/maintenance)
      */
+    /**
+     * Clear all drone cache using SCAN (safe for production)
+     */
     public void clearAllDroneCache() {
-        Set<String> keys = redisTemplate.keys(DRONE_STATUS_KEY_PREFIX + "*");
-        if (keys != null && !keys.isEmpty()) {
-            redisTemplate.delete(keys);
-        }
-        redisTemplate.delete(ACTIVE_DRONES_KEY);
-        redisTemplate.delete(DRONE_LOCATION_KEY);
+        try {
 
-        System.out.println("✓ Cleared all drone cache");
+            // Use SCAN instead of KEYS for production safety
+            ScanOptions options = ScanOptions.scanOptions()
+                    .match(DRONE_STATUS_KEY_PREFIX + "*")
+                    .count(100)
+                    .build();
+
+            Cursor<byte[]> cursor = redisTemplate.getConnectionFactory()
+                    .getConnection()
+                    .scan(options);
+
+            int deleted = 0;
+            while (cursor.hasNext()) {
+                String key = new String(cursor.next());
+                redisTemplate.delete(key);
+                deleted++;
+            }
+
+
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to clear cache", e);
+        }
     }
 }

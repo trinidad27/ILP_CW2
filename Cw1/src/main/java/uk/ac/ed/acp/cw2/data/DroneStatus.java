@@ -8,18 +8,20 @@ public class DroneStatus implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private String droneId;
-    private String status; // IDLE, IN_FLIGHT, DELIVERING, RETURNING, CHARGING, MAINTENANCE
+    private String status;
     private Double currentLng;
     private Double currentLat;
-    private Double batteryLevel; // 0.0 to 100.0
+    private Double batteryLevel;
     private String currentDeliveryId;
-    private Double speed; // meters per second
-    private Double altitude; // meters
+    private Double speed;
+    private Double altitude;
 
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
     private LocalDateTime lastUpdate;
 
-    // Constructors
+    private Integer totalMoves = 0;
+
+    // DEFAULT CONSTRUCTOR (REQUIRED for Jackson)
     public DroneStatus() {
         this.lastUpdate = LocalDateTime.now();
     }
@@ -30,7 +32,7 @@ public class DroneStatus implements Serializable {
         this.lastUpdate = LocalDateTime.now();
     }
 
-    // Getters and Setters
+    // GETTERS AND SETTERS (ALL REQUIRED)
     public String getDroneId() { return droneId; }
     public void setDroneId(String droneId) { this.droneId = droneId; }
 
@@ -72,5 +74,14 @@ public class DroneStatus implements Serializable {
                 ", battery=" + batteryLevel + "%" +
                 ", lastUpdate=" + lastUpdate +
                 '}';
+    }
+
+
+    public Integer getTotalMoves() {
+        return totalMoves;
+    }
+
+    public void setTotalMoves(Integer totalMoves) {
+        this.totalMoves = totalMoves;
     }
 }

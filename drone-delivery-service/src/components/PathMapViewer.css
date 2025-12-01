@@ -1,0 +1,173 @@
+.path-map-viewer {
+    margin-top: 2rem;
+    padding-top: 2rem;
+    border-top: 2px solid #e0e0e0;
+}
+
+.path-info {
+    background: #f9f9f9;
+    padding: 1.5rem;
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+    border: 1px solid #e0e0e0;
+}
+
+.path-info h3 {
+    margin: 0 0 1rem 0;
+    color: #333;
+    font-size: 1.2rem;
+    font-weight: 600;
+}
+
+.path-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.stat {
+    background: white;
+    padding: 1rem;
+    border-radius: 6px;
+    border: 1px solid #e0e0e0;
+    display: flex;
+    flex-direction: column;
+    text-align: center;
+}
+
+.stat-label {
+    font-size: 0.85rem;
+    color: #666;
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 500;
+}
+
+.stat-value {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: #333;
+}
+
+.drone-paths-list {
+    margin-top: 1rem;
+}
+
+.drone-paths-list h4 {
+    margin: 0 0 0.75rem 0;
+    color: #555;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.drone-path-item {
+    padding: 0.5rem 0;
+    color: #666;
+    font-size: 0.9rem;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.drone-path-item:last-child {
+    border-bottom: none;
+}
+
+.drone-path-item strong {
+    color: #333;
+}
+
+/* Map Container */
+.map-container {
+    position: relative;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 2px solid #e0e0e0;
+}
+
+.map-container .leaflet-container {
+    border-radius: 8px;
+}
+
+/* Map Legend */
+.map-legend {
+    background: white;
+    padding: 1rem;
+    border-top: 1px solid #e0e0e0;
+}
+
+.map-legend h4 {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.9rem;
+    color: #555;
+    font-weight: 600;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+    color: #666;
+}
+
+.legend-line {
+    width: 30px;
+    height: 3px;
+    margin-right: 0.75rem;
+    background: #3388ff;
+}
+
+.legend-line.solid {
+    background: #3388ff;
+}
+
+.legend-line.dashed {
+    background: linear-gradient(to right, #3388ff 50%, transparent 50%);
+    background-size: 10px 3px;
+}
+
+/* No Path Message */
+.no-path-message {
+    text-align: center;
+    padding: 3rem 2rem;
+    background: #f9f9f9;
+    border-radius: 8px;
+    border: 1px solid #e0e0e0;
+}
+
+.no-path-message p {
+    font-size: 1rem;
+    color: #666;
+    margin-bottom: 0.5rem;
+}
+
+.no-path-message small {
+    color: #999;
+    font-size: 0.85rem;
+}
+
+/* Leaflet Popup Styling */
+.leaflet-popup-content {
+    margin: 0.75rem;
+}
+
+.leaflet-popup-content strong {
+    color: #333;
+    font-size: 0.95rem;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .path-stats {
+        grid-template-columns: 1fr;
+    }
+
+    .map-container {
+        height: 400px !important;
+    }
+
+    .path-info {
+        padding: 1rem;
+    }
+}

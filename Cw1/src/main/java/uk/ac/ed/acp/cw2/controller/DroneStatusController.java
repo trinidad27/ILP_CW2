@@ -19,7 +19,6 @@ public class DroneStatusController {
         this.droneCacheService = droneCacheService;
     }
 
-    // ==================== EXACT PATHS (No conflicts) ====================
 
     /**
      * POST /api/v1/drones/status - Update drone status
@@ -98,7 +97,6 @@ public class DroneStatusController {
         return ResponseEntity.ok().build();
     }
 
-    // ==================== PATH VARIABLES (Placed last) ====================
 
     /**
      * GET /api/v1/drones/{droneId} - Get specific drone
@@ -110,11 +108,9 @@ public class DroneStatusController {
         DroneStatus status = droneCacheService.getDroneStatus(droneId);
 
         if (status == null) {
-            System.out.println("❌ Drone not found: " + droneId);
             return ResponseEntity.notFound().build();
         }
 
-        System.out.println("✅ Found drone: " + status.getDroneId());
         return ResponseEntity.ok(status);
     }
 
@@ -127,7 +123,6 @@ public class DroneStatusController {
             @RequestParam double lng,
             @RequestParam double lat) {
 
-        System.out.println("📍 Updating location for: " + droneId);
         droneCacheService.updateDroneLocation(droneId, lng, lat);
         return ResponseEntity.ok().build();
     }
@@ -140,7 +135,6 @@ public class DroneStatusController {
             @PathVariable String droneId,
             @RequestParam double level) {
 
-        System.out.println("🔋 Updating battery for: " + droneId);
         droneCacheService.updateBatteryLevel(droneId, level);
         return ResponseEntity.ok().build();
     }
@@ -150,7 +144,6 @@ public class DroneStatusController {
      */
     @DeleteMapping("/{droneId}")
     public ResponseEntity<Void> removeDrone(@PathVariable String droneId) {
-        System.out.println("🗑️ Removing drone: " + droneId);
         droneCacheService.removeDrone(droneId);
         return ResponseEntity.ok().build();
     }

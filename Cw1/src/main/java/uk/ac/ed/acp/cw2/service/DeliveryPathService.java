@@ -720,8 +720,14 @@ public class DeliveryPathService {
         List<RestrictedArea> noFlyZones = fetchRestrictedAreas();
         Map<Integer,Set<String>> dronesPerSP = fetchDronesPerServicePoint();
 
-        List<String> availableDroneIds = droneAvailabilityService.findAvailableDrones(dispatches);
-        if (availableDroneIds.isEmpty()) {
+        // Get all drone IDs instead of filtering strictly by availability
+        // This matches the behavior of calcDeliveryPath
+        List<String> allDroneIds = allDrones.stream()
+                .map(Drone::getId)
+                .collect(Collectors.toList());
+
+        if (allDroneIds.isEmpty()) {
+            System.err.println("⚠️ No drones found from ILP service");
             return createEmptyGeoJson();
         }
 
@@ -742,7 +748,7 @@ public class DeliveryPathService {
         DroneServicePoint selectedSP = null;
         double nearestDistance = Double.MAX_VALUE;
 
-        for (String droneId : availableDroneIds) {
+        for (String droneId : allDroneIds) {
             Integer spId = findServicePointForDrone(droneId, dronesPerSP);
             if (spId == null) continue;
 

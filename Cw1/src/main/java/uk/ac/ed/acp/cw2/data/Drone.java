@@ -31,6 +31,28 @@ public class Drone {
     @Valid
     @NotNull
     private Capability capability;
+    private String status = "IDLE";
+    private Double batteryLevel = 100.0;
+
+    private static final double BATTERY_PER_MOVE = 0.5;
+
+    public void consumeBattery(int moves) {
+        double consumption = moves * BATTERY_PER_MOVE;
+        this.batteryLevel = Math.max(0.0, this.batteryLevel - consumption);
+    }
+
+    public void rechargeBattery() {
+        this.batteryLevel = 100.0;
+    }
+
+    public boolean hasSufficientBattery(int moves) {
+        double requiredBattery = moves * BATTERY_PER_MOVE;
+        return this.batteryLevel >= requiredBattery;
+    }
+
+    public boolean needsCharging(){
+        return this.batteryLevel < 20.0;
+    }
 
     public Object getValueByAttribute(String attribute) {
         return switch (attribute) {
@@ -41,7 +63,10 @@ public class Drone {
             case "costPerMove" -> this.capability.getCostPerMove();
             case "costInitial" -> this.capability.getCostInitial();
             case "costFinal" -> this.capability.getCostFinal();
+            case "batteryLevel" -> this.batteryLevel;
             default -> null;
         };
     }
+
+
 }

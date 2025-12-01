@@ -1,258 +1,452 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { MapContainer, TileLayer, Marker, useMapEvents, Popup } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+import PathMapViewer from './PathMapViewer';
+import LiveDroneTracker from './LiveDroneTracker';
 import './DeliveryForm.css';
-import MapPicker from "./MapPicker";
 
+// Fix Leaflet default marker icons
+import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+    iconRetinaUrl: markerIcon2x,
+    iconUrl: markerIcon,
+    shadowUrl: markerShadow,
+});
+
+const MapClickHandler = ({ onMapClick }) => {
+    useMapEvents({
+        click(e) {
+            onMapClick(e.latlng);
+        },
+    });
+    return null;
+};
 
 const DeliveryForm = () => {
     const [formData, setFormData] = useState({
-        date: '',
-        time: '',
-        capacity: '',
-        cooling: false,
-        heating: false,
-        maxCost: '',
-        longitude: '',
-        latitude: ''
+        orderId: '',
+        date: new Date().toISOString().split('T')[0],
+        time: '12:00',
+        servicePointLng: -3.1883,
+        servicePointLat: 55.9533,
+        patientName: '',
+        medication: '',
+        requiresCooling: false,
+        requiresHeating: false,
+        capacity: 1.0
     });
 
+    const [servicePoints, setServicePoints] = useState([]);
+    const [pathResult, setPathResult] = useState(null);
+    const [message, setMessage] = useState(null);
     const [loading, setLoading] = useState(false);
-    const [error, setError] = useState(null);
-    const [success, setSuccess] = useState(false);
+    const [showMap, setShowMap] = useState(false);
+    const [assignedDroneId, setAssignedDroneId] = useState(null);
+    const [showLiveTracking, setShowLiveTracking] = useState(false);
 
-    const [mapPosition, setMapPosition] = useState(null);
+    const API_BASE = 'http://localhost:8080/api/v1';
 
-    const handleMapClick = (latlng) => {
-        setMapPosition([latlng.lat, latlng.lng]);
-        setFormData(prev => ({
-            ...prev,
-            latitude: latlng.lat.toFixed(6),
-            longitude: latlng.lng.toFixed(6)
-        }));
+    // Fetch service points on mount
+    useEffect(() => {
+        fetchServicePoints();
+    }, []);
+
+    const fetchServicePoints = async () => {
+        try {
+            const response = await axios.get(`${API_BASE}/service-points`);
+            setServicePoints(response.data);
+            console.log('Fetched service points:', response.data);
+        } catch (err) {
+            console.error('Error fetching service points:', err);
+            // Use mock data if endpoint doesn't exist yet
+            setServicePoints([
+                { id: 1, name: 'Central Medical Hub', location: { lng: -3.1883, lat: 55.9533 } },
+                { id: 2, name: 'North Hospital', location: { lng: -3.1850, lat: 55.9600 } },
+                { id: 3, name: 'South Clinic', location: { lng: -3.1900, lat: 55.9450 } },
+                { id: 4, name: 'East Medical Center', location: { lng: -3.1700, lat: 55.9500 } },
+                { id: 5, name: 'West Health Station', location: { lng: -3.2000, lat: 55.9550 } }
+            ]);
+        }
     };
 
-    const handleChange = (e) => {
-        const { name, value, type, checked } = e.target;
+    const handleMapClick = (latlng) => {
         setFormData(prev => ({
             ...prev,
-            [name]: type === 'checkbox' ? checked : value
+            servicePointLng: latlng.lng,
+            servicePointLat: latlng.lat
         }));
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+
+        if (!formData.orderId.trim()) {
+            setMessage({ type: 'error', text: 'Please enter an Order ID' });
+            return;
+        }
+
         setLoading(true);
-        setError(null);
-        setSuccess(false);
+        setMessage(null);
 
         try {
-            // Transform form data to MedDispatchRec format
-            const medDispatchRec = {
+            // Prepare the dispatch request in the format your MedDispatchRec expects
+            // Only include requirements if cooling/heating is needed or capacity != 1
+            let requirements = null;
+            if (formData.requiresCooling || formData.requiresHeating || formData.capacity !== 1.0) {
+                requirements = {
+                    capacity: formData.capacity,
+                    cooling: formData.requiresCooling,
+                    heating: formData.requiresHeating,
+                    maxCost: null
+                };
+            }
+
+            const dispatchRequest = {
+                id: parseInt(formData.orderId) || 1, // Must be Integer
                 date: formData.date,
                 time: formData.time,
-                requirements: {
-                    capacity: formData.capacity ? parseFloat(formData.capacity) : null,
-                    cooling: formData.cooling,
-                    heating: formData.heating,
-                    maxCost: formData.maxCost ? parseFloat(formData.maxCost) : null
-                },
+                requirements: requirements,
                 delivery: {
-                    lng: parseFloat(formData.longitude),
-                    lat: parseFloat(formData.latitude)
+                    lng: formData.servicePointLng,
+                    lat: formData.servicePointLat,
+                    alt: 0 // LngLatAlt requires altitude
                 }
             };
 
-            // Send to your Spring Boot backend
+            console.log('Submitting delivery request:', dispatchRequest);
+
+            // Call the existing endpoint in DroneController
             const response = await axios.post(
-                'http://localhost:8080/api/deliveries',
-                [medDispatchRec], // Send as array
-                {
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                }
+                `${API_BASE}/calcDeliveryPath`,
+                [dispatchRequest] // Wrap in array - endpoint expects List
             );
 
-            console.log('Response:', response.data);
-            setSuccess(true);
+            console.log('Path calculation response:', response.data);
+
+            // Check if we got a valid response
+            if (!response.data || !response.data.dronePaths || response.data.dronePaths.length === 0) {
+                setMessage({
+                    type: 'error',
+                    text: 'No available drones found for this delivery. Check: (1) ILP REST service is running, (2) Date/time matches drone availability, (3) Drone capabilities match requirements'
+                });
+                setPathResult(null);
+                return;
+            }
+
+            // Transform backend response to include geojson for LiveDroneTracker
+            const transformedData = {
+                ...response.data,
+                dronePaths: response.data.dronePaths.map(dronePath => {
+                    // Extract all flightPath coordinates from all deliveries
+                    const allCoordinates = [];
+                    if (dronePath.deliveries) {
+                        dronePath.deliveries.forEach(delivery => {
+                            if (delivery.flightPath) {
+                                delivery.flightPath.forEach(point => {
+                                    allCoordinates.push([point.lng, point.lat]);
+                                });
+                            }
+                        });
+                    }
+
+                    // Create GeoJSON structure
+                    const geojson = {
+                        type: "FeatureCollection",
+                        features: [{
+                            type: "Feature",
+                            properties: {},
+                            geometry: {
+                                type: "LineString",
+                                coordinates: allCoordinates
+                            }
+                        }]
+                    };
+
+                    return {
+                        droneId: dronePath.droneId,
+                        geojson: geojson,
+                        moves: response.data.totalMoves,
+                        cost: response.data.totalCost
+                    };
+                })
+            };
+
+            setPathResult(transformedData);
+
+            // Extract assigned drone ID
+            if (response.data.dronePaths && response.data.dronePaths.length > 0) {
+                setAssignedDroneId(response.data.dronePaths[0].droneId);
+            }
+
+            setMessage({
+                type: 'success',
+                text: `Delivery scheduled! Drone: ${response.data.dronePaths?.[0]?.droneId || 'N/A'}, Total moves: ${response.data.totalMoves || 'N/A'}, Cost: ${response.data.totalCost?.toFixed(2) || 'N/A'}`
+            });
+
+            setShowLiveTracking(true);
 
             // Reset form
             setFormData({
-                date: '',
-                time: '',
-                capacity: '',
-                cooling: false,
-                heating: false,
-                maxCost: '',
-                longitude: '',
-                latitude: ''
+                orderId: '',
+                date: new Date().toISOString().split('T')[0],
+                time: '12:00',
+                servicePointLng: -3.1883,
+                servicePointLat: 55.9533,
+                patientName: '',
+                medication: '',
+                requiresCooling: false,
+                requiresHeating: false,
+                capacity: 1.0
             });
 
         } catch (err) {
-            console.error('Error submitting delivery:', err);
-            setError(err.response?.data?.message || 'Failed to submit delivery');
+            console.error('Delivery scheduling error:', err);
+            console.error('Error response:', err.response?.data);
+
+            const errorMessage = err.response?.data?.message
+                || err.response?.data?.error
+                || err.message
+                || 'Unknown error occurred';
+
+            setMessage({
+                type: 'error',
+                text: `Failed to schedule delivery: ${errorMessage}`
+            });
+            setPathResult(null);
         } finally {
             setLoading(false);
         }
     };
 
+    const handleInputChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({
+            ...prev,
+            [name]: value
+        }));
+    };
+
     return (
         <div className="delivery-form-container">
-            <h2>📦 Schedule Drone Delivery</h2>
+            <div className="delivery-form">
+                <h2>Schedule Medical Delivery</h2>
 
-            {success && (
-                <div className="alert alert-success">
-                    ✅ Delivery scheduled successfully!
-                </div>
-            )}
+                {message && (
+                    <div className={`message ${message.type}`}>
+                        {message.text}
+                    </div>
+                )}
 
-            {error && (
-                <div className="alert alert-error">
-                    ❌ {error}
-                </div>
-            )}
-
-            <form onSubmit={handleSubmit} className="delivery-form">
-                {/* Date & Time Section */}
-                <div className="form-section">
-                    <h3>📅 Schedule</h3>
-
+                <form onSubmit={handleSubmit}>
+                    {/* Order ID */}
                     <div className="form-group">
-                        <label htmlFor="date">Delivery Date *</label>
+                        <label>Order ID (Number) *</label>
                         <input
-                            type="date"
-                            id="date"
-                            name="date"
-                            value={formData.date}
-                            onChange={handleChange}
+                            type="number"
+                            name="orderId"
+                            placeholder="e.g., 1001"
+                            value={formData.orderId}
+                            onChange={handleInputChange}
                             required
-                            min={new Date().toISOString().split('T')[0]}
+                        />
+                    </div>
+
+                    {/* Date and Time */}
+                    <div className="form-row">
+                        <div className="form-group">
+                            <label>Delivery Date *</label>
+                            <input
+                                type="date"
+                                name="date"
+                                value={formData.date}
+                                onChange={handleInputChange}
+                                required
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label>Delivery Time *</label>
+                            <input
+                                type="time"
+                                name="time"
+                                value={formData.time}
+                                onChange={handleInputChange}
+                                required
+                            />
+                        </div>
+                    </div>
+
+                    {/* Service Point Location */}
+                    <div className="form-group">
+                        <div className="section-header">
+                            <label>Destination Service Point *</label>
+                            <button
+                                type="button"
+                                className={`map-toggle ${showMap ? 'active' : ''}`}
+                                onClick={() => setShowMap(!showMap)}
+                            >
+                                {showMap ? 'Click map to set location' : 'Select on Map'}
+                            </button>
+                        </div>
+
+                        <div className="coordinates">
+                            <div className="form-group">
+                                <label>Longitude</label>
+                                <input
+                                    type="number"
+                                    step="0.000001"
+                                    name="servicePointLng"
+                                    value={formData.servicePointLng}
+                                    onChange={handleInputChange}
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label>Latitude</label>
+                                <input
+                                    type="number"
+                                    step="0.000001"
+                                    name="servicePointLat"
+                                    value={formData.servicePointLat}
+                                    onChange={handleInputChange}
+                                />
+                            </div>
+                        </div>
+
+                        {showMap && (
+                            <div className="map-picker">
+                                <MapContainer
+                                    center={[formData.servicePointLat, formData.servicePointLng]}
+                                    zoom={13}
+                                    style={{ height: '400px', width: '100%' }}
+                                >
+                                    <TileLayer
+                                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                                    />
+
+                                    {/* Show existing service points */}
+                                    {servicePoints.map(sp => (
+                                        <Marker
+                                            key={sp.id}
+                                            position={[sp.location.lat, sp.location.lng]}
+                                        >
+                                            <Popup>{sp.name}</Popup>
+                                        </Marker>
+                                    ))}
+
+                                    {/* Show selected location */}
+                                    <Marker position={[formData.servicePointLat, formData.servicePointLng]}>
+                                        <Popup>Selected Destination</Popup>
+                                    </Marker>
+
+                                    <MapClickHandler onMapClick={handleMapClick} />
+                                </MapContainer>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Delivery Requirements */}
+                    <div className="form-group">
+                        <label>Delivery Requirements</label>
+                        <div className="requirements-section">
+                            <div className="checkbox-group">
+                                <label className="checkbox-label">
+                                    <input
+                                        type="checkbox"
+                                        name="requiresCooling"
+                                        checked={formData.requiresCooling}
+                                        onChange={(e) => setFormData(prev => ({
+                                            ...prev,
+                                            requiresCooling: e.target.checked
+                                        }))}
+                                    />
+                                    <span>Cooling Required</span>
+                                </label>
+                            </div>
+                            <div className="checkbox-group">
+                                <label className="checkbox-label">
+                                    <input
+                                        type="checkbox"
+                                        name="requiresHeating"
+                                        checked={formData.requiresHeating}
+                                        onChange={(e) => setFormData(prev => ({
+                                            ...prev,
+                                            requiresHeating: e.target.checked
+                                        }))}
+                                    />
+                                    <span>Heating Required</span>
+                                </label>
+                            </div>
+                            <div className="form-group-inline">
+                                <label>Capacity (kg)</label>
+                                <input
+                                    type="number"
+                                    step="0.1"
+                                    name="capacity"
+                                    value={formData.capacity}
+                                    onChange={handleInputChange}
+                                    min="0.1"
+                                    max="10"
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Optional Fields */}
+                    <div className="form-group">
+                        <label>Patient Name (Optional)</label>
+                        <input
+                            type="text"
+                            name="patientName"
+                            placeholder="e.g., John Smith"
+                            value={formData.patientName}
+                            onChange={handleInputChange}
                         />
                     </div>
 
                     <div className="form-group">
-                        <label htmlFor="time">Delivery Time *</label>
+                        <label>Medication (Optional)</label>
                         <input
-                            type="time"
-                            id="time"
-                            name="time"
-                            value={formData.time}
-                            onChange={handleChange}
-                            required
+                            type="text"
+                            name="medication"
+                            placeholder="e.g., Insulin"
+                            value={formData.medication}
+                            onChange={handleInputChange}
                         />
                     </div>
-                </div>
 
-                <div className="form-section">
-                    <h3>🗺️ Select Location on Map</h3>
-                    <p style={{ fontSize: '0.9rem', color: '#666', marginBottom: '1rem' }}>
-                        Click on the map to select delivery location
-                    </p>
-                    <MapPicker
-                        position={mapPosition}
-                        onLocationSelect={handleMapClick}
+                    {/* Submit Button */}
+                    <button
+                        type="submit"
+                        className="submit-button"
+                        disabled={loading}
+                    >
+                        {loading ? 'Calculating Path...' : 'Schedule Delivery'}
+                    </button>
+                </form>
+
+                {/* Display Path Result and Live Tracking */}
+                {pathResult && showLiveTracking && assignedDroneId && (
+                    <LiveDroneTracker
+                        droneId={assignedDroneId}
+                        pathData={pathResult}
+                        onTrackingComplete={() => {
+                            console.log('Tracking complete');
+                            setShowLiveTracking(false);
+                        }}
                     />
-                </div>
+                )}
 
-                {/* Location Section */}
-                <div className="form-section">
-                    <h3>📍 Delivery Location</h3>
-
-                    <div className="form-group">
-                        <label htmlFor="longitude">Longitude *</label>
-                        <input
-                            type="number"
-                            id="longitude"
-                            name="longitude"
-                            value={formData.longitude}
-                            onChange={handleChange}
-                            step="0.000001"
-                            placeholder="-3.188267"
-                            required
-                        />
-                    </div>
-
-                    <div className="form-group">
-                        <label htmlFor="latitude">Latitude *</label>
-                        <input
-                            type="number"
-                            id="latitude"
-                            name="latitude"
-                            value={formData.latitude}
-                            onChange={handleChange}
-                            step="0.000001"
-                            placeholder="55.944251"
-                            required
-                        />
-                    </div>
-                </div>
-
-                {/* Requirements Section */}
-                <div className="form-section">
-                    <h3>📋 Requirements</h3>
-
-                    <div className="form-group">
-                        <label htmlFor="capacity">Cargo Capacity (kg)</label>
-                        <input
-                            type="number"
-                            id="capacity"
-                            name="capacity"
-                            value={formData.capacity}
-                            onChange={handleChange}
-                            step="0.1"
-                            min="0"
-                            placeholder="1.0"
-                        />
-                    </div>
-
-                    <div className="form-group">
-                        <label htmlFor="maxCost">Maximum Cost (£)</label>
-                        <input
-                            type="number"
-                            id="maxCost"
-                            name="maxCost"
-                            value={formData.maxCost}
-                            onChange={handleChange}
-                            step="0.01"
-                            min="0"
-                            placeholder="12.00"
-                        />
-                    </div>
-
-                    <div className="form-group-checkbox">
-                        <label>
-                            <input
-                                type="checkbox"
-                                name="cooling"
-                                checked={formData.cooling}
-                                onChange={handleChange}
-                            />
-                            ❄️ Requires Cooling
-                        </label>
-                    </div>
-
-                    <div className="form-group-checkbox">
-                        <label>
-                            <input
-                                type="checkbox"
-                                name="heating"
-                                checked={formData.heating}
-                                onChange={handleChange}
-                            />
-                            🔥 Requires Heating
-                        </label>
-                    </div>
-                </div>
-
-                <button
-                    type="submit"
-                    className="submit-button"
-                    disabled={loading}
-                >
-                    {loading ? '⏳ Processing...' : '🚁 Schedule Delivery'}
-                </button>
-            </form>
+                {pathResult && !showLiveTracking && (
+                    <PathMapViewer pathData={pathResult} />
+                )}
+            </div>
         </div>
     );
 };
