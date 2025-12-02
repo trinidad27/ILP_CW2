@@ -2,6 +2,7 @@ package uk.ac.ed.acp.cw2;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableAsync;
 
 /**
  * The Application class serves as the entry point for the Spring Boot application.
@@ -13,6 +14,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * The main method executes the SpringApplication.run method to launch the application.
  */
 @SpringBootApplication
+@EnableAsync
 public class Application {
 
     public static void main(String[] args) {

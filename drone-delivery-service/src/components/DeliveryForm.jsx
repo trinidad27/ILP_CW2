@@ -64,14 +64,6 @@ const DeliveryForm = () => {
             console.log('Fetched service points:', response.data);
         } catch (err) {
             console.error('Error fetching service points:', err);
-            // Use mock data if endpoint doesn't exist yet
-            setServicePoints([
-                { id: 1, name: 'Central Medical Hub', location: { lng: -3.1883, lat: 55.9533 } },
-                { id: 2, name: 'North Hospital', location: { lng: -3.1850, lat: 55.9600 } },
-                { id: 3, name: 'South Clinic', location: { lng: -3.1900, lat: 55.9450 } },
-                { id: 4, name: 'East Medical Center', location: { lng: -3.1700, lat: 55.9500 } },
-                { id: 5, name: 'West Health Station', location: { lng: -3.2000, lat: 55.9550 } }
-            ]);
         }
     };
 
@@ -139,7 +131,10 @@ const DeliveryForm = () => {
                 return;
             }
 
-            // Transform backend response to include geojson for LiveDroneTracker
+            // Extract assigned drone ID and flight path
+            const droneId = response.data.dronePaths?.[0]?.droneId;
+
+            // Transform backend response to include geojson for PathMapViewer
             const transformedData = {
                 ...response.data,
                 dronePaths: response.data.dronePaths.map(dronePath => {
@@ -149,13 +144,13 @@ const DeliveryForm = () => {
                         dronePath.deliveries.forEach(delivery => {
                             if (delivery.flightPath) {
                                 delivery.flightPath.forEach(point => {
-                                    allCoordinates.push([point.lng, point.lat]);
+                                    allCoordinates.push([point.lng, point.lat]); // [lng, lat] for GeoJSON
                                 });
                             }
                         });
                     }
 
-                    // Create GeoJSON structure
+                    // Create GeoJSON structure for PathMapViewer
                     const geojson = {
                         type: "FeatureCollection",
                         features: [{
@@ -171,25 +166,52 @@ const DeliveryForm = () => {
                     return {
                         droneId: dronePath.droneId,
                         geojson: geojson,
-                        moves: response.data.totalMoves,
-                        cost: response.data.totalCost
+                        moves: dronePath.moves,
+                        cost: dronePath.cost
                     };
                 })
             };
 
-            setPathResult(transformedData);
+            if (droneId && response.data.dronePaths[0].deliveries) {
+                // Extract coordinates for backend simulation (lat, lng order)
+                const allCoordinates = [];
+                response.data.dronePaths[0].deliveries.forEach(delivery => {
+                    if (delivery.flightPath) {
+                        delivery.flightPath.forEach(point => {
+                            allCoordinates.push([point.lat, point.lng]); // [lat, lng] for backend
+                        });
+                    }
+                });
 
-            // Extract assigned drone ID
-            if (response.data.dronePaths && response.data.dronePaths.length > 0) {
-                setAssignedDroneId(response.data.dronePaths[0].droneId);
+                // Start the backend simulation
+                try {
+                    await axios.post(`${API_BASE}/startSimulation`, {
+                        droneId: droneId,
+                        deliveryId: String(formData.orderId),
+                        pathCoordinates: allCoordinates
+                    });
+
+                    setMessage({
+                        type: 'success',
+                        text: `Delivery started! Drone ${droneId} is now flying. Check the path below and switch to Dashboard to watch live progress. Total moves: ${response.data.totalMoves || 'N/A'}, Cost: ${response.data.totalCost?.toFixed(2) || 'N/A'}`
+                    });
+                } catch (simErr) {
+                    console.error('Failed to start simulation:', simErr);
+                    setMessage({
+                        type: 'success',
+                        text: `Delivery scheduled! Drone: ${droneId}, Total moves: ${response.data.totalMoves || 'N/A'}, Cost: ${response.data.totalCost?.toFixed(2) || 'N/A'}. (Simulation failed to start: ${simErr.message})`
+                    });
+                }
+            } else {
+                setMessage({
+                    type: 'success',
+                    text: `Delivery scheduled! Total moves: ${response.data.totalMoves || 'N/A'}, Cost: ${response.data.totalCost?.toFixed(2) || 'N/A'}`
+                });
             }
 
-            setMessage({
-                type: 'success',
-                text: `Delivery scheduled! Drone: ${response.data.dronePaths?.[0]?.droneId || 'N/A'}, Total moves: ${response.data.totalMoves || 'N/A'}, Cost: ${response.data.totalCost?.toFixed(2) || 'N/A'}`
-            });
-
-            setShowLiveTracking(true);
+            setPathResult(transformedData);
+            setAssignedDroneId(droneId);
+            setShowLiveTracking(false); // Show static path map instead of live tracking
 
             // Reset form
             setFormData({

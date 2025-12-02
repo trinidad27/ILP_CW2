@@ -45,7 +45,6 @@ public class DroneCacheService {
             );
         }
 
-        System.out.println("✓ Cached drone status: " + status);
     }
 
     /**

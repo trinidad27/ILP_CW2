@@ -5,7 +5,7 @@ const DeliveryResult = ({ result }) => {
 
     return (
         <div className="delivery-result">
-            <h3>✅ Delivery Scheduled!</h3>
+            <h3>Delivery Scheduled!</h3>
             <div className="result-details">
                 <p><strong>Total Cost:</strong> £{result.cost.toFixed(2)}</p>
                 <p><strong>Total Moves:</strong> {result.moves}</p>

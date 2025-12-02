@@ -9,6 +9,7 @@ import uk.ac.ed.acp.cw2.service.DeliveryPathService;
 import uk.ac.ed.acp.cw2.service.DroneAvailabilityService;
 import uk.ac.ed.acp.cw2.service.DroneCacheService;
 import uk.ac.ed.acp.cw2.service.DroneService;
+import uk.ac.ed.acp.cw2.service.DeliverySimulationService;
 
 import java.util.List;
 import java.util.Map;
@@ -26,22 +27,25 @@ public class DroneController {
     private final DroneAvailabilityService droneAvailabilityService;
     private final DeliveryPathService deliveryPathService;
     private final DroneCacheService droneCacheService;
+    private final DeliverySimulationService deliverySimulationService;
 
     public DroneController(
             DroneService droneService,
             DroneAvailabilityService droneAvailabilityService,
             DeliveryPathService deliveryPathService,
-            DroneCacheService droneCacheService) {
+            DroneCacheService droneCacheService,
+            DeliverySimulationService deliverySimulationService) {
 
         this.droneService = droneService;
         this.droneAvailabilityService = droneAvailabilityService;
         this.deliveryPathService = deliveryPathService;
         this.droneCacheService = droneCacheService;
+        this.deliverySimulationService = deliverySimulationService;
     }
 
     @GetMapping("/dronesWithCooling/{state}")
     public List<Long> dronesWithCooling(@PathVariable boolean state) {
-        List <Drone> drones = droneService.getAllDrones();
+        List<Drone> drones = droneService.getAllDrones();
 
         List<Long> ids = drones.stream()
                 .filter(d -> d.getCapability() != null
@@ -105,7 +109,6 @@ public class DroneController {
 
     @PostMapping("/calcDeliveryPathAsGeoJson")
     public ResponseEntity<Map<String, Object>> calcDeliveryPathAsGeoJson(@Valid @RequestBody List<MedDispatchRec> dispatches) {
-        System.out.println("🗺️ Calculating path for " + dispatches.size() + " dispatch(es)");
 
         // Calculate path using your existing service
         Map<String, Object> geoJsonResponse = deliveryPathService.calcDeliveryPathAsGeoJson(dispatches);
@@ -133,7 +136,6 @@ public class DroneController {
                                 // Update status to IN_FLIGHT
                                 status.setStatus("IN_FLIGHT");
 
-                                // Set delivery ID directly from dispatch ID
                                 String deliveryIds = dispatches.stream()
                                     .map(d -> String.valueOf(d.getId()))
                                     .collect(Collectors.joining(","));
@@ -181,7 +183,6 @@ public class DroneController {
      */
     @PostMapping("/syncDronesToCache")
     public ResponseEntity<Map<String, Object>> syncDronesToCache() {
-        System.out.println("🔄 Starting drone sync to Redis cache...");
 
         try {
             if (droneCacheService == null) {
@@ -189,7 +190,7 @@ public class DroneController {
                         .body(Map.of("error", "DroneCacheService not available"));
             }
 
-            // Get all drones from your existing service
+            // Get all drones
             List<Drone> allDrones = droneService.getAllDrones();
 
             if (allDrones.isEmpty()) {
@@ -315,7 +316,6 @@ public class DroneController {
                 return ResponseEntity.notFound().build();
             }
 
-            // Reset position to Appleton Tower
             status.setCurrentLng(-3.186874);
             status.setCurrentLat(55.944494);
 
@@ -391,8 +391,6 @@ public class DroneController {
             @PathVariable String droneId,
             @RequestParam(defaultValue = "5") int seconds) {
 
-        System.out.println("🔋 Charging drone " + droneId + " for " + seconds + " seconds");
-
         try {
             DroneStatus status = droneCacheService.getDroneStatus(droneId);
 
@@ -456,6 +454,78 @@ public class DroneController {
         );
 
         return ResponseEntity.ok(servicePoints);
+    }
+
+    /**
+     * Start a background simulation for a delivery
+     * This runs server-side and continues even if the frontend disconnects
+     */
+    @PostMapping("/startSimulation")
+    public ResponseEntity<Map<String, Object>> startSimulation(@RequestBody Map<String, Object> request) {
+        try {
+            String droneId = (String) request.get("droneId");
+            String deliveryId = (String) request.get("deliveryId");
+            List<List<Double>> pathCoordinatesRaw = (List<List<Double>>) request.get("pathCoordinates");
+
+            if (droneId == null || pathCoordinatesRaw == null) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "Missing required fields: droneId and pathCoordinates"));
+            }
+
+            // Convert List<List<Double>> to List<double[]>
+            List<double[]> pathCoordinates = pathCoordinatesRaw.stream()
+                    .map(coord -> new double[]{coord.get(0), coord.get(1)})
+                    .collect(Collectors.toList());
+
+            // Check if simulation is already running
+            if (deliverySimulationService.isSimulationActive(droneId)) {
+                return ResponseEntity.status(HttpStatus.CONFLICT)
+                        .body(Map.of("error", "Simulation already running for drone " + droneId));
+            }
+
+            // Start the simulation asynchronously
+            deliverySimulationService.startSimulation(droneId, pathCoordinates, deliveryId);
+
+            return ResponseEntity.ok(Map.of(
+                    "message", "Simulation started for drone " + droneId,
+                    "droneId", droneId,
+                    "pathLength", pathCoordinates.size()
+            ));
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to start simulation: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Stop an active simulation
+     */
+    @PostMapping("/stopSimulation/{droneId}")
+    public ResponseEntity<Map<String, Object>> stopSimulation(@PathVariable String droneId) {
+        try {
+            deliverySimulationService.stopSimulation(droneId);
+            return ResponseEntity.ok(Map.of(
+                    "message", "Simulation stopped for drone " + droneId,
+                    "droneId", droneId
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Check if a simulation is active for a drone
+     */
+    @GetMapping("/simulationStatus/{droneId}")
+    public ResponseEntity<Map<String, Object>> getSimulationStatus(@PathVariable String droneId) {
+        boolean isActive = deliverySimulationService.isSimulationActive(droneId);
+        return ResponseEntity.ok(Map.of(
+                "droneId", droneId,
+                "isActive", isActive
+        ));
     }
 
 }

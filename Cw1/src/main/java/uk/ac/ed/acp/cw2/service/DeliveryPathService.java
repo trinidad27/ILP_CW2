@@ -7,13 +7,13 @@ import uk.ac.ed.acp.cw2.data.*;
 import java.util.*;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
-import java.util.LinkedHashMap;
 
 @Service
 public class DeliveryPathService {
     private final Supplier<String> ilpEndpointSupplier;
     private final RestTemplate restTemplate = new RestTemplate();
     private final DroneAvailabilityService droneAvailabilityService;
+    private final DroneCacheService droneCacheService;
 
     private static final double MOVE_DISTANCE = 0.00015;
     private static final double CLOSE_ENOUGH_THRESHOLD = 0.00015;
@@ -51,9 +51,11 @@ public class DeliveryPathService {
     }
 
     public DeliveryPathService(Supplier<String> ilpEndpointSupplier,
-                               DroneAvailabilityService droneAvailabilityService) {
+                               DroneAvailabilityService droneAvailabilityService,
+                               DroneCacheService droneCacheService) {
         this.ilpEndpointSupplier = ilpEndpointSupplier;
         this.droneAvailabilityService = droneAvailabilityService;
+        this.droneCacheService = droneCacheService;
     }
 
     public DeliveryPathResponse calcDeliveryPath(List<MedDispatchRec> dispatches) {
@@ -119,6 +121,11 @@ public class DeliveryPathService {
                 for (String droneId : entry.getValue()) {
                     if (usedDrones.contains(droneId)) continue;
 
+                    // Check if drone is currently in flight or busy
+                    if (isDroneBusy(droneId)) {
+                        continue;
+                    }
+
                     Drone drone = droneMap.get(droneId);
                     if (drone == null || drone.getCapability() == null) continue;
 
@@ -166,6 +173,26 @@ public class DeliveryPathService {
         }
 
         return new DeliveryPathResponse(totalCost, totalMoves, dronePaths);
+    }
+
+    /**
+     * Check if a drone is currently busy (in flight, charging, etc.)
+     */
+    private boolean isDroneBusy(String droneId) {
+        try {
+            DroneStatus status = droneCacheService.getDroneStatus(droneId);
+            if (status == null) {
+                return false; // Not in cache = not busy
+            }
+
+            // Consider drone busy if it's in flight, returning, or has an active delivery
+            String droneStatus = status.getStatus();
+            return "IN_FLIGHT".equals(droneStatus) ||
+                   "RETURNING".equals(droneStatus) ||
+                   status.getCurrentDeliveryId() != null;
+        } catch (Exception e) {
+            return false; // Assume available if we can't check
+        }
     }
 
     /**
@@ -263,11 +290,7 @@ public class DeliveryPathService {
         // Sort dispatches by nearest neighbor for efficiency
         List<MedDispatchRec> sorted = sortByNearest(currentPosition, dispatches);
 
-        int estimatedMoves = 0;
-        int deliveryNum = 0;
-
         for (MedDispatchRec dispatch : sorted) {
-            deliveryNum++;
 
             LngLatAlt dest = dispatch.getDelivery();
 
@@ -282,22 +305,10 @@ public class DeliveryPathService {
             int movesBack = pathBack.size() - 1;
 
             // Check if adding this delivery would exceed maxMoves
-            int totalMovesWithThis = estimatedMoves + movesToDelivery + hoverMove + movesBack;
 
-
-            // Check maxCost constraint
-            if (dispatch.getRequirements() != null &&
-                    dispatch.getRequirements().getMaxCost() != null) {
-
-                double totalCostWithThisDelivery = costInitial +
-                        (totalMovesWithThis * costPerMove) +
-                        costFinal;
-
-            }
 
             // Accept this delivery
             selectedDispatches.add(dispatch);
-            estimatedMoves += movesToDelivery + hoverMove;
 
             // Update current position to the "close enough" point we'll reach
             if (!pathToDelivery.isEmpty()) {
@@ -727,7 +738,6 @@ public class DeliveryPathService {
                 .collect(Collectors.toList());
 
         if (allDroneIds.isEmpty()) {
-            System.err.println("⚠️ No drones found from ILP service");
             return createEmptyGeoJson();
         }
 
@@ -749,6 +759,11 @@ public class DeliveryPathService {
         double nearestDistance = Double.MAX_VALUE;
 
         for (String droneId : allDroneIds) {
+            // Skip drones that are currently busy
+            if (isDroneBusy(droneId)) {
+                continue;
+            }
+
             Integer spId = findServicePointForDrone(droneId, dronesPerSP);
             if (spId == null) continue;
 

@@ -25,7 +25,6 @@ public class DroneStatusController {
      */
     @PostMapping("/status")
     public ResponseEntity<DroneStatus> updateDroneStatus(@RequestBody DroneStatus status) {
-        System.out.println("📝 Updating drone status: " + status.getDroneId());
         droneCacheService.updateDroneStatus(status);
         return ResponseEntity.ok(status);
     }
@@ -35,7 +34,6 @@ public class DroneStatusController {
      */
     @GetMapping("/stats")
     public ResponseEntity<Map<String, Object>> getCacheStats() {
-        System.out.println("📊 Getting cache stats");
         Map<String, Object> stats = droneCacheService.getCacheStats();
         return ResponseEntity.ok(stats);
     }
@@ -45,7 +43,6 @@ public class DroneStatusController {
      */
     @GetMapping("/active")
     public ResponseEntity<List<DroneStatus>> getActiveDrones() {
-        System.out.println("📋 Getting all active drones");
         List<DroneStatus> drones = droneCacheService.getAllActiveDrones();
         return ResponseEntity.ok(drones);
     }
@@ -59,7 +56,6 @@ public class DroneStatusController {
             @RequestParam double lat,
             @RequestParam(defaultValue = "5.0") double radiusKm) {
 
-        System.out.println("🗺️ Getting nearby drones");
         List<DroneStatus> drones = droneCacheService.getNearbyDrones(lng, lat, radiusKm);
         return ResponseEntity.ok(drones);
     }
@@ -69,7 +65,6 @@ public class DroneStatusController {
      */
     @GetMapping("/search/by-status/{status}")
     public ResponseEntity<List<DroneStatus>> getDronesByStatus(@PathVariable String status) {
-        System.out.println("🔎 Getting drones by status: " + status);
         List<DroneStatus> drones = droneCacheService.getDronesByStatus(status);
         return ResponseEntity.ok(drones);
     }
@@ -79,7 +74,6 @@ public class DroneStatusController {
      */
     @GetMapping("/search")
     public ResponseEntity<DroneStatus> searchDrone(@RequestParam String droneId) {
-        System.out.println("🔍 Searching for drone (query): " + droneId);
         DroneStatus status = droneCacheService.getDroneStatus(droneId);
         if (status == null) {
             return ResponseEntity.notFound().build();
@@ -92,7 +86,6 @@ public class DroneStatusController {
      */
     @DeleteMapping("/cache/clear")
     public ResponseEntity<Void> clearCache() {
-        System.out.println("🗑️ Clearing all cache");
         droneCacheService.clearAllDroneCache();
         return ResponseEntity.ok().build();
     }
@@ -103,7 +96,6 @@ public class DroneStatusController {
      */
     @GetMapping("/{droneId}")
     public ResponseEntity<DroneStatus> getDroneById(@PathVariable String droneId) {
-        System.out.println("🔍 Getting drone by ID (path): " + droneId);
 
         DroneStatus status = droneCacheService.getDroneStatus(droneId);
 

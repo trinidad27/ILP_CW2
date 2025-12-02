@@ -97,18 +97,6 @@ const DroneDashboard = () => {
         return '#F44336';
     };
 
-    const handleCompleteDelivery = async (droneId) => {
-        try {
-            const response = await axios.post(`${API_BASE}/completeDelivery/${droneId}`);
-            console.log('Delivery completed:', response.data);
-            await fetchDrones(); // Refresh the list
-        } catch (err) {
-            console.error('Error completing delivery:', err);
-            setError('Failed to complete delivery: ' + (err.response?.data?.error || err.message));
-        }
-    };
-
-
     const handleSyncDrones = async () => {
         setLoading(true);
         setError(null);
@@ -141,7 +129,7 @@ const DroneDashboard = () => {
                 <div className="header-top">
                     <h1>Drone Fleet Monitor</h1>
                     <button onClick={handleSyncDrones} className="sync-button" disabled={loading}>
-                        🔄 Sync Drones from ILP
+                        Sync Drones from ILP
                     </button>
                 </div>
                 <div className="header-stats">

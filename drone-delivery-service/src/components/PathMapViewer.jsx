@@ -131,18 +131,6 @@ const PathMapViewer = ({ pathData }) => {
 
                         <FitBounds geojson={geojson} />
                     </MapContainer>
-
-                    <div className="map-legend">
-                        <h4>Legend:</h4>
-                        <div className="legend-item">
-                            <span className="legend-line solid"></span>
-                            <span>Delivery Path</span>
-                        </div>
-                        <div className="legend-item">
-                            <span className="legend-line dashed"></span>
-                            <span>Return Path</span>
-                        </div>
-                    </div>
                 </div>
             ) : (
                 <div className="no-path-message">
