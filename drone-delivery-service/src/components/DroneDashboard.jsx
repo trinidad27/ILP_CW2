@@ -158,7 +158,6 @@ const DroneDashboard = () => {
                 {drones.length === 0 ? (
                     <div className="no-drones">
                         <p>No active drones</p>
-                        <small>Create a drone using the Simulator tab</small>
                     </div>
                 ) : (
                     drones.map((drone) => (

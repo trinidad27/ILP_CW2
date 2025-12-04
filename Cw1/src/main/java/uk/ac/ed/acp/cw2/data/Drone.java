@@ -34,7 +34,7 @@ public class Drone {
     private String status = "IDLE";
     private Double batteryLevel = 100.0;
 
-    private static final double BATTERY_PER_MOVE = 0.5;
+    private static final double BATTERY_PER_MOVE = 0.1;
 
     public void consumeBattery(int moves) {
         double consumption = moves * BATTERY_PER_MOVE;
